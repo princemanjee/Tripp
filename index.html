@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<meta name="robots" content="noindex, nofollow, noarchive">
+	<meta name="referrer" content="no-referrer">
+	<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src https://*.supabase.co; base-uri 'none'; form-action 'none'">
+	<title>Sign in</title>
+	<link rel="stylesheet" href="styles.css?v=20260930094154">
+</head>
+<body>
+
+	<main id="lock" class="lock">
+		<form id="lock-form" class="lock-card" autocomplete="off">
+			<label for="lock-password" class="lock-label">Password</label>
+			<input id="lock-password" class="field" type="password" autocomplete="current-password" autofocus required>
+			<button id="lock-submit" class="button button-primary" type="submit">Unlock</button>
+			<p id="lock-status" class="status" role="status" aria-live="polite"></p>
+		</form>
+	</main>
+
+	<main id="portal" class="portal" hidden>
+		<header class="bar">
+			<span id="sync" class="sync" role="status" aria-live="polite"></span>
+			<span class="bar-actions">
+				<button id="open-keys" class="button button-quiet" type="button" hidden>Passwords</button>
+				<button id="lock-now" class="button button-quiet" type="button">Lock</button>
+			</span>
+		</header>
+
+		<section id="thread" class="thread" aria-label="Messages" tabindex="0"></section>
+
+		<form id="compose" class="compose">
+			<label for="compose-body" class="visually-hidden">Message</label>
+			<textarea id="compose-body" class="field compose-body" rows="3" maxlength="10000" placeholder="Write a message" required></textarea>
+			<div class="compose-row">
+				<span id="compose-status" class="status" role="status" aria-live="polite"></span>
+				<button id="compose-send" class="button button-primary" type="submit">Send</button>
+			</div>
+		</form>
+	</main>
+
+	<dialog id="keys" class="dialog">
+		<form id="keys-form" autocomplete="off">
+			<h2 class="dialog-title">Change a password</h2>
+			<label class="dialog-label" for="keys-role">Whose password</label>
+			<select id="keys-role" class="field">
+				<option value="guest">The other person's</option>
+				<option value="owner">Mine</option>
+			</select>
+			<label class="dialog-label" for="keys-new">New password</label>
+			<input id="keys-new" class="field" type="password" autocomplete="new-password" required>
+			<label class="dialog-label" for="keys-again">New password again</label>
+			<input id="keys-again" class="field" type="password" autocomplete="new-password" required>
+			<p id="keys-status" class="status" role="status" aria-live="polite"></p>
+			<div class="dialog-row">
+				<button id="keys-cancel" class="button button-quiet" type="button">Close</button>
+				<button id="keys-save" class="button button-primary" type="submit">Save password</button>
+			</div>
+		</form>
+	</dialog>
+
+	<script src="config.js?v=20260930094154"></script>
+	<script src="app.js?v=20260930094154"></script>
+</body>
+</html>
