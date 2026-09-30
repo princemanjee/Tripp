@@ -201,11 +201,9 @@ begin
 	if p_role is null or p_role not in ('owner', 'guest') then
 		return json_build_object('ok', false, 'error', 'bad_role');
 	end if;
-	if p_new is null or char_length(p_new) < 12 then
-		return json_build_object('ok', false, 'error', 'too_short');
-	end if;
-	if char_length(p_new) > 200 then
-		return json_build_object('ok', false, 'error', 'too_long');
+	-- No length or composition rules: the owner's chosen password is accepted as given.
+	if p_new is null or p_new = '' then
+		return json_build_object('ok', false, 'error', 'empty_key');
 	end if;
 	if exists (select 1 from tripp.keys k
 	            where k.role <> p_role and k.hash = extensions.crypt(p_new, k.hash)) then

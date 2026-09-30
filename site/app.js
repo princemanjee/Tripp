@@ -1,6 +1,12 @@
 (function () {
 	'use strict';
 
+	// Never take a password over plain HTTP, whatever the host's redirect settings are.
+	if (location.protocol === 'http:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
+		location.replace('https://' + location.host + location.pathname);
+		return;
+	}
+
 	var config = window.APP_CONFIG || {};
 	var POLL_MS = 15000;
 	var IDLE_MS = 10 * 60 * 1000;
@@ -25,9 +31,9 @@
 		locked: 'Too many wrong tries. Wait 15 minutes, then try again.',
 		expired: 'Locked after a period without activity. Enter your password again.',
 		empty: 'Write something before sending.',
-		too_long: 'That is too long. The limit is 10,000 characters for a message and 200 for a password.',
-		too_short: 'Use 12 characters or more.',
-		same_as_other: 'The two passwords must be different from each other.',
+		too_long: 'That message is too long. The limit is 10,000 characters.',
+		empty_key: 'Enter a password.',
+		same_as_other: 'That is already the other person\'s password. The password is the only thing that tells the two of you apart, so they have to differ.',
 		forbidden: 'Only the owner can change passwords.',
 		bad_role: 'Pick whose password to change.',
 		network: 'Could not reach the server. Check your connection and try again.',

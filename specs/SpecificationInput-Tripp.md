@@ -68,6 +68,6 @@ Moved out by the scope decision above; each remains wanted for a later version u
 
 ## Open Questions
 
-- OQ-1: "Not known to anyone" against a public repository and a public URL. The page address and the code cannot be hidden on the Free plan. Working interpretation: the public page shows only a bare password prompt, and the code contains no secrets and no names. Not yet confirmed by the owner.
+- OQ-1: RESOLVED by the owner on 2026-09-30 04:34 CDT. "Not known to anyone" means security through obscurity: the repository is public by the owner's choice, the spec files in it may stay public, and the portal is served from the owner's own domain. The public page still shows only a bare password prompt.
 - OQ-2: Which Supabase account and project hold the data, and how the build gets access to it. Not yet answered.
 - OQ-3: Supabase free-tier projects are paused after a period of inactivity. A paused project takes the portal offline until the account holder restores it. Not yet decided how to handle this.
