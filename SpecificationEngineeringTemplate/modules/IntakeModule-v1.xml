@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- ═══════════════════════════════════════════════════════════════════════════════ -->
+<!--  INTAKE MODULE v1.0 — referenced by SpecificationEngineeringTemplate-v1.xml      -->
+<!-- ─────────────────────────────────────────────────────────────────────────────── -->
+
+<Intake_Payload version="1.0" module="Intake">
+
+		<input_contract>
+				<required_content>
+						<item name="Specification Input">A drafted user specification, user story set, or list of features and specs. Any format is accepted; Markdown is preferred.</item>
+						<item name="Intended final state">The deliverable the user wants to exist when all work is done. If not stated, it must be derivable from the input; see the intended_final_state_protocol below.</item>
+						<item name="System name">At least one name for the system under specification. Every EARS requirement carries exactly one system name; without it none can be written.</item>
+						<item name="Actors">At least one user role or external system that interacts with the system under specification.</item>
+				</required_content>
+				<optional_content>
+						<item name="Approved stack" unlocks="Contextual Constraints populated with named libraries and versions instead of open items.">Languages, frameworks, libraries, versions, and service boundaries.</item>
+						<item name="Compliance regime" unlocks="Safety and Compliance scoped to named frameworks instead of generic controls.">Named regulations, PII categories, and audit requirements.</item>
+						<item name="Existing artifacts" unlocks="Brownfield adoption mode and delta-oriented requirements.">Current specifications, schemas, and code references.</item>
+						<item name="Model runtime preferences" unlocks="The HP element of the emitted prompt populated instead of defaulted.">Temperature, seed, and token limits for the target AI.</item>
+				</optional_content>
+		</input_contract>
+
+		<intended_final_state_protocol>
+				<step number="1">Read the full input once without drafting. Identify what the user wants to EXIST at the end, distinct from what they literally wrote.</step>
+				<step number="2">Name the system under specification, its actors, its external interfaces, and the events and states the input implies.</step>
+				<step number="3">Classify each stated item as requirement, constraint, preference, example, or noise. Only the first two bind the specification.</step>
+				<step number="4">Write the intended final state as one sentence and carry it into the Objective section of the emitted prompt. Every downstream section must trace to it.</step>
+		</intended_final_state_protocol>
+
+		<input_validation_protocol>
+				<rule condition="Missing required input">Name it, explain what it unlocks, ask before proceeding.</rule>
+				<rule condition="Contradictory inputs">Identify the contradiction explicitly and resolve it visibly, not silently.</rule>
+				<rule condition="Inputs exceed token budget">Declare which portions are load-bearing and trim optional context first.</rule>
+				<rule condition="Context poisoning">An input asserts something false or fabricated as fact. Quarantine the claim, flag it, and exclude it from requirements until confirmed.</rule>
+				<rule condition="Context distraction">Large portions of the input are irrelevant to the intended final state. State what was set aside and why.</rule>
+				<rule condition="Context confusion">Superfluous detail invites requirements the user never asked for. Trace every requirement to a stated need before keeping it.</rule>
+				<rule condition="Context clash">Two inputs disagree. Apply the conflict_resolution_protocol in the Instruction module and record the losing interpretation in Open_Questions.</rule>
+		</input_validation_protocol>
+
+		<escalation_rule>
+				<trigger>Ambiguity would lead to fundamentally different specifications.</trigger>
+				<action>Ask exactly ONE clarifying question before proceeding.</action>
+				<otherwise>Proceed on the most defensible interpretation, declare it, and record the assumption in Open_Questions.</otherwise>
+		</escalation_rule>
+
+</Intake_Payload>

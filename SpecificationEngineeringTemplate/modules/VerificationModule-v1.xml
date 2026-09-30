@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- ═══════════════════════════════════════════════════════════════════════════════ -->
+<!--  VERIFICATION MODULE v1.0 — referenced by SpecificationEngineeringTemplate-v1    -->
+<!-- ─────────────────────────────────────────────────────────────────────────────── -->
+
+<Verification_Payload version="1.0" module="Verification">
+
+		<pipeline_overview>
+				Requirements pass through two gates before they may be emitted: Refinement, which repairs the natural-language layer, and Auto-Formalization, which checks the logical layer. Health metrics then keep the specification synchronized with the implementation over its life.
+		</pipeline_overview>
+
+		<refinement_phase stage="REFINE">
+				<step name="Abductive edge-case discovery">Work backward from each user story to the conditions that could make it fail. Every unhandled condition found becomes an Unwanted Behaviour (If/Then) requirement or a recorded Open Question.</step>
+				<step name="Contradiction resolution">Search the requirement set for pairs that cannot both hold. Resolve via the conflict_resolution_protocol; record the losing interpretation in Open_Questions.</step>
+				<step name="EARS rewriting">Rewrite every vague natural-language statement into one of the six EARS patterns. A statement that resists all six patterns is not yet a requirement; return it to intake as an Open Question.</step>
+				<exit_criterion>No requirement remains outside EARS form, and every discovered edge case has either a requirement or an Open Question.</exit_criterion>
+		</refinement_phase>
+
+		<auto_formalization_phase stage="FORMALIZE">
+				<translation>
+						<rule>Translate each EARS requirement into a logical implication of the form antecedent =&gt; consequent, in SMT-lib style. Preconditions and triggers form the antecedent; system responses form the consequent.</rule>
+						<rule>Ubiquitous requirements translate with the antecedent true.</rule>
+				</translation>
+				<consistency_check>
+						<method>For every pair of implications whose antecedents can be satisfied simultaneously, check that their consequents do not conflict.</method>
+						<on_failure>Flag the pair as a contradiction, cite both requirement IDs, and return them to the refinement phase.</on_failure>
+				</consistency_check>
+				<completeness_check>
+						<method>Enumerate reachable system states and events. For each, check that at least one EARS rule prescribes behavior.</method>
+						<on_failure>Report each uncovered reachable state as a specification gap with a proposed requirement, and record it in Open_Questions until the user accepts or rejects it.</on_failure>
+				</completeness_check>
+				<scenario_generation>
+						<method>From the implication set, enumerate concrete execution traces: accepted behaviors the system must exhibit, and rejected behaviors it must never exhibit.</method>
+						<use>Traces seed the acceptance criteria in SPEC.md and the task success datasets in EVALS.md.</use>
+				</scenario_generation>
+		</auto_formalization_phase>
+
+		<health_metrics>
+				<metric name="Specification Coverage">
+						<definition>The ratio of implemented code elements that map to a requirement ID in SPEC.md.</definition>
+						<target>Every merged change references at least one requirement ID; coverage below 90 percent blocks release.</target>
+				</metric>
+				<metric name="Specification Freshness">
+						<definition>The sync delay between a change in implementation behavior and the corresponding specification update.</definition>
+						<target>No behavior change ships more than one release cycle ahead of its specification update; drift beyond that is logged as a defect against the specification.</target>
+				</metric>
+				<purpose>Both metrics exist to prevent specification drift: the state where the code and the Specification Stack describe different systems.</purpose>
+		</health_metrics>
+
+</Verification_Payload>

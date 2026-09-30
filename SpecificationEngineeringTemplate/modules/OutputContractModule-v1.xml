@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- ═══════════════════════════════════════════════════════════════════════════════ -->
+<!--  OUTPUT CONTRACT MODULE v1.0 — referenced by SpecificationEngineeringTemplate-v1 -->
+<!-- ─────────────────────────────────────────────────────────────────────────────── -->
+
+<Output_Contract_Payload version="1.0" module="Output_Contract">
+
+		<response_format required="true">
+				<format>XML for the emitted prompt; Markdown for the Specification Stack artifacts</format>
+				<structural_rules>
+						<rule>Every tag is an explicit opening and closing pair. No self-closing form.</rule>
+						<rule>Each nesting level is indented by two tab characters.</rule>
+						<rule>The document must be well-formed before it is returned.</rule>
+						<rule>Do not use em dashes anywhere in the output.</rule>
+				</structural_rules>
+		</response_format>
+
+		<deliverable name="Specification_Engineering_Prompt">
+				<description>The primary artifact: a complete prompt for a target AI coding agent, constructed from the user's Specification Input. It must carry all five PSpec elements.</description>
+				<pspec_element code="SP" name="System/Role Prompt">The persona and operational context the target AI must adopt, specialized to the user's domain via domain_signals.</pspec_element>
+				<pspec_element code="EX" name="Ordered illustrative examples">Canonical examples ordered from common case to edge case. Curate few and diverse; do not stuff edge cases.</pspec_element>
+				<pspec_element code="Q" name="The Query">The task statement: produce the Specification Stack for the user's intended final state, then implement and verify against it.</pspec_element>
+				<pspec_element code="OF" name="Output Schema/Format">The specification_anatomy below, the Specification Stack file set, and any JSON schemas from the Data Contracts section.</pspec_element>
+				<pspec_element code="HP" name="Hyperparameters">Temperature, seed, and token bounds for the target AI. Default: temperature at or below 0.3, fixed seed where supported, explicit max output tokens.</pspec_element>
+		</deliverable>
+
+		<specification_anatomy>
+				<description>The emitted prompt must force the target AI to define the task across these sections, in this order. This is the backbone of the OF element.</description>
+				<anatomy_section number="1" name="Objective">The exact business problem, user roles, expected value, and explicitly excluded scope (non-goals).</anatomy_section>
+				<anatomy_section number="2" name="Contextual Constraints">Approved stacks, libraries, versions, and service boundaries. Nothing outside the list may be introduced.</anatomy_section>
+				<anatomy_section number="3" name="Data Contracts">Explicit JSON schemas for inputs and outputs, validation rules, and integration boundaries.</anatomy_section>
+				<anatomy_section number="4" name="Functional Logic">All algorithmic requirements written ONLY in the six EARS patterns defined in the Requirements module. Every error path is a mandatory If/Then requirement.</anatomy_section>
+				<anatomy_section number="5" name="AI Behavior and Guardrails">Explicit tool permissions, response format adherence, confidence and escalation limits, and prohibited behaviors, including: must not invent or hallucinate data.</anatomy_section>
+				<anatomy_section number="6" name="Safety and Compliance">Scoped PII handling rules, access controls, audit log structures, and human approval gates.</anatomy_section>
+				<anatomy_section number="7" name="Acceptance Criteria">Observable, falsifiable, testable conditions that prove a requirement is satisfied, linked by requirement ID.</anatomy_section>
+				<anatomy_section number="8" name="Validation and Evals Plan">Required unit, integration, end-to-end, and adversarial regression tests, plus eval datasets and thresholds.</anatomy_section>
+				<anatomy_section number="9" name="Open_Questions">Every assumption, unresolved ambiguity, rejected interpretation, and specification gap. Required; if intake found none, the section states that explicitly.</anatomy_section>
+		</specification_anatomy>
+
+		<deliverable name="Specification_Stack">
+				<description>The emitted prompt must instruct the target AI to persist its output as a durable, git-managed stack of Markdown artifacts.</description>
+				<artifact file="CONSTITUTION.md" purpose="Immutable engineering policies">Standards, code style, testing requirements, security constraints, CI/CD rules.</artifact>
+				<artifact file="SPEC.md" purpose="Functional requirements">Actors, EARS-driven scenarios, use cases, decision logic, acceptance criteria.</artifact>
+				<artifact file="PLAN.md" purpose="Technical design">Components, architecture, database schemas, API contracts, migrations, risks.</artifact>
+				<artifact file="TASKS.md" purpose="Executable units">Isolated, atomic implementation tasks with testable completion criteria and verification hooks.</artifact>
+				<artifact file="EVALS.md" purpose="Evaluation assets">Task success datasets, failure taxonomies, model performance thresholds.</artifact>
+				<iso_29148_mapping>
+						<map artifact="CONSTITUTION.md" document="BRS">Business Requirements Specification: durable business rules and policies.</map>
+						<map artifact="SPEC.md" document="StRS and OpsCon">Stakeholder Requirements Specification and Operational Concept: actors, scenarios, operational behavior.</map>
+						<map artifact="PLAN.md" document="SyRS">System Requirements Specification: system architecture and technical requirements.</map>
+						<map artifact="TASKS.md" document="SRS">Software Requirements Specification: implementable software units.</map>
+						<map artifact="EVALS.md" document="SRS verification">The verification section of the SRS: how each requirement is proven.</map>
+				</iso_29148_mapping>
+		</deliverable>
+
+		<deliverable name="Process_Artifact">
+				Sections: Draft, Critique with scored dimensions, Revisions applied, Final, Process Summary.
+		</deliverable>
+
+		<quality_dimensions required="true">
+				<dimension name="Completeness" threshold="&gt;=90%">
+						<definition>Every declared input is addressed, every anatomy section populated, every open question surfaced.</definition>
+						<anchor level="60%">Major inputs unaddressed; open questions buried or absent.</anchor>
+						<anchor level="80%">All anatomy sections present but some requirements lack IDs or acceptance links.</anchor>
+						<anchor level="95%">Every input traced to an identified requirement; every gap recorded in Open_Questions.</anchor>
+				</dimension>
+				<dimension name="Testability" threshold="&gt;=85%">
+						<definition>Each requirement implies an observable pass or fail condition.</definition>
+						<anti_gaming_rule>A requirement that an obviously wrong implementation could satisfy is not testable. For each requirement, state the cheapest wrong implementation that would still pass, then tighten the requirement until that implementation fails.</anti_gaming_rule>
+						<anchor level="60%">Requirements phrased as intentions ("should be fast").</anchor>
+						<anchor level="80%">Requirements measurable but gameable by a degenerate implementation.</anchor>
+						<anchor level="95%">Every requirement carries a bounded, measurable acceptance condition and the gaming path is closed.</anchor>
+				</dimension>
+				<dimension name="Intent Fidelity" threshold="&gt;=95%">
+						<definition>Preserves what was actually asked for. Enhances, never redirects.</definition>
+						<anchor level="60%">Solved an adjacent problem the author did not raise.</anchor>
+						<anchor level="80%">The right problem, but with tangential requirements the input does not support.</anchor>
+						<anchor level="95%">Every section traces back to a stated need.</anchor>
+				</dimension>
+				<dimension name="Process Integrity" threshold="100%">
+						<definition>All construction stages and self_refine phases executed before delivery.</definition>
+						<anchor level="binary">Either all phases ran, or they did not.</anchor>
+				</dimension>
+		</quality_dimensions>
+
+		<emission_rules>
+				<rule>Save the emitted prompt: ./output/SpecEngPrompt-[Subject]-v1.xml</rule>
+				<rule>Save the critique trail: ./output/Critique_[Subject]_[YYYY-MM-DD].md</rule>
+				<rule>The Specification Stack itself is produced later, by the target AI running the emitted prompt, in the target repository under version control: CONSTITUTION.md, SPEC.md, PLAN.md, TASKS.md, EVALS.md.</rule>
+				<rule>Confirm every file is written to disk before claiming completion.</rule>
+		</emission_rules>
+
+</Output_Contract_Payload>

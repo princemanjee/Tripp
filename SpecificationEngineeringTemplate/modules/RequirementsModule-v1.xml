@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- ═══════════════════════════════════════════════════════════════════════════════ -->
+<!--  REQUIREMENTS MODULE v1.0 — referenced by SpecificationEngineeringTemplate-v1    -->
+<!-- ─────────────────────────────────────────────────────────────────────────────── -->
+
+<Requirements_Payload version="1.0" module="Requirements">
+
+		<ears_syntax authoritative="true">
+				<guidance>Every functional requirement must be written in exactly one of these six patterns. The patterns constrain natural language so requirements are observable and falsifiable.</guidance>
+				<pattern name="Ubiquitous" keywords="none">
+						<template>The &lt;system name&gt; shall &lt;system response&gt;</template>
+						<applies_when>Behavior that is always active under all conditions. No trigger and no state, therefore no keyword.</applies_when>
+						<example>The mobile phone shall have a mass of less than 150 grams.</example>
+				</pattern>
+				<pattern name="State-Driven" keywords="While">
+						<template>While &lt;precondition(s)&gt;, the &lt;system name&gt; shall &lt;system response&gt;</template>
+						<applies_when>Behavior active for as long as a specified state remains true.</applies_when>
+						<example>While there is no card in the ATM, the ATM shall display "insert card to begin".</example>
+				</pattern>
+				<pattern name="Event-Driven" keywords="When">
+						<template>When &lt;trigger&gt;, the &lt;system name&gt; shall &lt;system response&gt;</template>
+						<applies_when>Response required when a specific triggering event occurs.</applies_when>
+						<example>When "mute" is selected, the laptop shall suppress all audio output.</example>
+				</pattern>
+				<pattern name="Optional Feature" keywords="Where">
+						<template>Where &lt;feature is included&gt;, the &lt;system name&gt; shall &lt;system response&gt;</template>
+						<applies_when>Requirements that apply only to product variants containing a specified optional feature.</applies_when>
+						<example>Where the car has a sunroof, the car shall have a sunroof control panel on the driver door.</example>
+				</pattern>
+				<pattern name="Unwanted Behaviour" keywords="If, Then">
+						<template>If &lt;trigger&gt;, then the &lt;system name&gt; shall &lt;system response&gt;</template>
+						<applies_when>Required response to undesired situations: faults, failures, errors. Mandatory for every error path.</applies_when>
+						<example>If an invalid credit card number is entered, then the website shall display "please re-enter credit card details".</example>
+				</pattern>
+				<pattern name="Complex" keywords="While, When, If, Then">
+						<template>While &lt;precondition(s)&gt;, When &lt;trigger&gt;, the &lt;system name&gt; shall &lt;system response&gt;</template>
+						<applies_when>Richer behavior needing more than one EARS keyword, including complex unwanted behaviors.</applies_when>
+						<example>While the aircraft is on ground, When reverse thrust is commanded, the engine control system shall enable reverse thrust.</example>
+				</pattern>
+				<ears_ruleset>
+						<rule>Zero or many preconditions.</rule>
+						<rule>Zero or one trigger.</rule>
+						<rule>Exactly one system name.</rule>
+						<rule>One or many system responses.</rule>
+				</ears_ruleset>
+				<clause_ordering>The clauses of a requirement written in EARS always appear in the same order: preconditions, then trigger, then system name, then system responses.</clause_ordering>
+		</ears_syntax>
+
+		<requirement_characteristics standard="ISO/IEC/IEEE 29148:2018">
+				<note>The corpus mind map counts nine characteristics; the 2018 standard lists ten. All ten are encoded here.</note>
+				<characteristic name="Necessary">Defines an essential capability; removing it leaves a deficiency no other requirement covers.</characteristic>
+				<characteristic name="Appropriate">Level of detail matches the level of the entity it governs.</characteristic>
+				<characteristic name="Unambiguous">Admits exactly one interpretation.</characteristic>
+				<characteristic name="Complete">Needs no further elaboration to be understood and acted on.</characteristic>
+				<characteristic name="Singular">States one capability, characteristic, constraint, or quality factor.</characteristic>
+				<characteristic name="Feasible">Realizable within system constraints at acceptable risk.</characteristic>
+				<characteristic name="Verifiable">Provable by Test, Demonstration, Inspection, or Analysis.</characteristic>
+				<characteristic name="Correct">Accurately represents the stakeholder need it derives from.</characteristic>
+				<characteristic name="Conforming">Follows the approved template and style, here EARS.</characteristic>
+				<characteristic name="Traceable">Linked upward to its source and downward to design, tasks, and evals.</characteristic>
+		</requirement_characteristics>
+
+		<requirement_identity>
+				<scheme>REQ-[DOMAIN]-[NNN], for example REQ-AUTH-001</scheme>
+				<rule>IDs are stable across versions. The ID of a deleted requirement is never reused.</rule>
+				<rule>Completeness cannot be scored without IDs; an unidentified requirement does not exist for traceability purposes.</rule>
+		</requirement_identity>
+
+		<traceability>
+				<field name="source">Origin of the requirement: a stakeholder, a document, or a standard.</field>
+				<field name="rationale">Why the requirement exists and why its priority holds.</field>
+				<field name="priority">P1 to P3. P1 defines the MVP.</field>
+				<field name="verification_method">Test | Demonstration | Inspection | Analysis</field>
+				<field name="acceptance_criteria">One or more observable, falsifiable conditions, linked by requirement ID.</field>
+				<matrix>Every requirement links forward to design elements in PLAN.md, tasks in TASKS.md, and evals in EVALS.md, and backward to its source. A requirement with no forward links is unimplemented; code with no backward link is unspecified.</matrix>
+		</traceability>
+
+		<formal_methods_vocabulary route="Complex">
+				<guidance>On the Complex route, express critical properties in these constructs alongside their EARS form. They are the bridge to machine checking in the Verification module.</guidance>
+				<construct name="INVARIANT">A predicate that must always hold. Example: INVARIANT count : NATURAL &amp; count &lt; Max</construct>
+				<construct name="INITIALISATION">Initial values of state variables. Example: INITIALISATION count := 0</construct>
+				<construct name="OPERATIONS">State transitions as a precondition plus an atomic action.</construct>
+				<construct name="VARIABLES">Mutable components of the system state.</construct>
+				<construct name="CONSTANTS">Values fixed after initialization.</construct>
+				<construct name="PROPERTIES">Predicates constraining constants. Example: PROPERTIES Max = 10</construct>
+				<construct name="DEFINITIONS">Reusable textual replacement logic grouping sub-predicates.</construct>
+				<construct name="MACHINE">Encapsulation of the state and operations of a formal model.</construct>
+				<construct name="Liveness">What the system must eventually do. Example: whenever a request is received, a response eventually follows.</construct>
+		</formal_methods_vocabulary>
+
+</Requirements_Payload>

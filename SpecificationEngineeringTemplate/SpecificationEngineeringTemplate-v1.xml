@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- ═══════════════════════════════════════════════════════════════════════════════ -->
+<!--  SPECIFICATION ENGINEERING TEMPLATE v1.3 — MODULAR ROOT                          -->
+<!--  Holds no content of its own; each section resolves to an external module file   -->
+<!--  via <file_reference>. Swap a module by editing one path. Input: a drafted user  -->
+<!--  Specification Input. Output: a Specification Engineering Prompt that directs a  -->
+<!--  target AI to produce the five-artifact Specification Stack and build from it.   -->
+<!-- ─────────────────────────────────────────────────────────────────────────────── -->
+
+<Specification_Engineering_Template version="1.3" domain="specification-engineering">
+
+		<Intake_Module id="1" title="Intake" required="true">
+				<why_this_matters>
+						The template is fed a drafted specification, not a blank form. If the input is
+						misread, every downstream module elaborates the wrong intent with full
+						confidence. Intake is where that is caught, and it is the only module with
+						no fallback.
+				</why_this_matters>
+				<file_reference path="./modules/IntakeModule-v1.xml" format="XML"></file_reference>
+		</Intake_Module>
+
+		<Context_Module id="2" title="Context" required="true">
+				<why_this_matters>
+						Context determines how ambiguity is interpreted. Without an explicit role,
+						domain, and audience, the model guesses, and guesses compound across
+						sections.
+				</why_this_matters>
+				<file_reference path="./modules/ContextModule-v1.xml" format="XML" fallback="./modules/ContextModule-default.xml"></file_reference>
+		</Context_Module>
+
+		<Instruction_Module id="3" title="Instruction" required="false">
+				<why_this_matters>
+						Reasoning scaffolding does not just improve quality, it changes what output
+						is possible. This module carries the construction cycle, the critique loop,
+						and the prohibitions.
+				</why_this_matters>
+				<file_reference path="./modules/InstructionModule-v1.xml" format="XML" fallback="./modules/InstructionModule-single-pass.xml"></file_reference>
+		</Instruction_Module>
+
+		<Requirements_Module id="4" title="Requirements" required="false">
+				<why_this_matters>
+						EARS is the mechanism that makes requirements observable and falsifiable.
+						A specification whose functional logic is not pattern-constrained readmits
+						the ambiguity this template exists to remove.
+				</why_this_matters>
+				<file_reference path="./modules/RequirementsModule-v1.xml" format="XML"></file_reference>
+		</Requirements_Module>
+
+		<Verification_Module id="5" title="Verification" required="false">
+				<why_this_matters>
+						A specification that has not been checked for contradictions and coverage
+						gaps is a draft. Refinement repairs the language layer, auto-formalization
+						checks the logical layer, and health metrics keep the specification and the
+						code from drifting apart.
+				</why_this_matters>
+				<file_reference path="./modules/VerificationModule-v1.xml" format="XML"></file_reference>
+		</Verification_Module>
+
+		<Output_Contract_Module id="6" title="Output Contract" required="true">
+				<why_this_matters>
+						Format determines whether the consumer can parse and act on the content.
+						The contract fixes the prompt anatomy, the Specification Stack, and the
+						quality bar the critique loop scores against.
+				</why_this_matters>
+				<file_reference path="./modules/OutputContractModule-v1.xml" format="XML" fallback="./modules/OutputContractModule-markdown.xml"></file_reference>
+		</Output_Contract_Module>
+
+		<dependency_map>
+				<why_this_matters>
+						Loading modules the task does not need wastes context and degrades output.
+						File references are just-in-time context loading; include only what the
+						route requires.
+				</why_this_matters>
+				<complexity_routing>
+						<procedure>Evaluate every trigger below against the Intake classification, in order, and record each as fired or not fired with the input line that decides it. Route Complex if any trigger fired. Otherwise route Simple if the simple_condition holds, and Standard in every other case. Carry the full evaluation into the Process Summary of the critique artifact.</procedure>
+						<trigger id="T1" name="Regulated or sensitive data">The input names a regulation, standard, regulator, audit obligation, or compliance regime, or the system handles personal, financial, health, or safety data. This is the same condition as the Regulated Industry domain signal.</trigger>
+						<trigger id="T2" name="Multi-domain">Two or more domain_signals apply to the intended final state.</trigger>
+						<trigger id="T3" name="Stated invariant">The input marks a rule as holding regardless of mode, state, or actor, with an explicit marker such as absolute, non-negotiable, guaranteed, in every mode, under no circumstances, or always or never applied to the system as a whole. Only the marker fires this trigger. A feature statement in the form "X are rejected" or "the system does Y" describes triggered behaviour and does not fire T3. The absence of a marker is a determination, not a doubt, so the tie_break does not convert an unmarked feature into an invariant. An invariant is what the consistency check exists to protect.</trigger>
+						<trigger id="T4" name="Irreversible external effect">The system makes payments, files with an authority, transmits to a third party, deletes or purges user data, or actuates physical equipment.</trigger>
+						<trigger id="T5" name="Formal verification requested">The input asks for proofs, invariants, formal properties, or machine-checkable requirements.</trigger>
+						<simple_condition>The intended final state is a document or content artifact rather than a system whose behaviour must be specified, so no EARS requirement will be written.</simple_condition>
+						<tie_break>If it is unclear whether a trigger fires, it fires. The Verification module costs a few dozen lines of context; a missed contradiction costs a shipped defect.</tie_break>
+						<route level="Simple" includes="Intake, Context, Output Contract" rule="no trigger fired and the simple_condition holds">Fallback variants of Context and Output Contract are acceptable on this route.</route>
+						<route level="Standard" includes="Simple route plus Instruction, Requirements" rule="no trigger fired and the simple_condition does not hold">A full EARS requirement set constructed through the critique cycle, without auto-formalization.</route>
+						<route level="Complex" includes="Standard route plus Verification" rule="any trigger fired">Auto-formalization, formal-methods vocabulary, the full pipeline.</route>
+				</complexity_routing>
+				<rule_of_thumb>If the loaded template exceeds 15 percent of the model context window, trim optional modules first.</rule_of_thumb>
+		</dependency_map>
+
+</Specification_Engineering_Template>

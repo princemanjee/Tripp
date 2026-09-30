@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- ═══════════════════════════════════════════════════════════════════════════════ -->
+<!--  INSTRUCTION MODULE — SINGLE-PASS FALLBACK. No critique cycle.                   -->
+<!-- ─────────────────────────────────────────────────────────────────────────────── -->
+
+<Instruction_Payload version="1.0" module="Instruction" variant="single-pass">
+
+		<strategy_declaration>
+				<parameter name="PrimaryReasoningStrategy">Single pass</parameter>
+				<parameter name="StrategyJustification">For simple, well-bounded inputs a critique cycle over-processes. Structure still governs; iteration does not.</parameter>
+		</strategy_declaration>
+
+		<construction_cycle>
+				<stage number="1" name="INTAKE">Read the Specification Input and determine the intended final state per the Intake module.</stage>
+				<stage number="2" name="POPULATE">Fill the specification anatomy defined in the Output Contract.</stage>
+				<stage number="3" name="EMIT">Assemble and deliver the prompt in one pass. No critique cycle runs.</stage>
+		</construction_cycle>
+
+		<constraints>
+				<donts>
+						<rule>Never resolve ambiguity silently, even without a critique cycle.</rule>
+						<rule>Never present inference as verified fact, and never invent data or sources.</rule>
+						<rule>Never omit Open_Questions from the emitted prompt.</rule>
+				</donts>
+		</constraints>
+
+		<variant_note>
+				Fallback for the Simple route only. It contains no self_refine cycle, no error
+				recovery protocol, and no conflict resolution hierarchy. If the input shows
+				contradictions or regulated-domain content, load InstructionModule-v1.xml.
+		</variant_note>
+
+</Instruction_Payload>

@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- ═══════════════════════════════════════════════════════════════════════════════ -->
+<!--  INSTRUCTION MODULE v1.2 — referenced by SpecificationEngineeringTemplate-v1.xml -->
+<!-- ─────────────────────────────────────────────────────────────────────────────── -->
+
+<Instruction_Payload version="1.2" module="Instruction">
+
+		<strategy_declaration>
+				<parameter name="PrimaryReasoningStrategy">Self-Refine over a staged construction cycle</parameter>
+				<parameter name="StrategyJustification">Specification quality compounds across critique cycles; precision, completeness, and testability are rarely achieved in one pass.</parameter>
+		</strategy_declaration>
+
+		<construction_cycle>
+				<stage number="1" name="INTAKE">Apply the Intake module: read the Specification Input, determine the intended final state, validate the input, classify content.</stage>
+				<stage number="2" name="ROUTE">Select the complexity route by evaluating every trigger in the dependency map's complexity_routing, in order, against the Intake classification. Record each trigger as fired or not fired with its deciding evidence in the Process Summary, apply the tie_break to any doubt, then load only the modules the resulting route requires.</stage>
+				<stage number="3" name="REFINE">Route-dependent. On the Complex route, run the refinement phase of the Verification module: abductive reasoning from user stories to unhandled edge cases, contradiction resolution, and rewriting of all vague language into EARS patterns. On the Standard route, which does not load the Verification module, perform the same three steps with the modules that are loaded: derive an Unwanted Behaviour requirement for every failure condition reachable from a stated feature, resolve contradictions through the conflict_resolution_protocol with the losing interpretation recorded in Open_Questions, and rewrite every vague statement into one of the six EARS patterns of the Requirements module.</stage>
+				<stage number="4" name="POPULATE">Fill the specification anatomy defined in the Output Contract, using the Requirements module for all functional logic.</stage>
+				<stage number="5" name="FORMALIZE">Route-dependent. On the Complex route, run the auto-formalization phase of the Verification module: logical implications, consistency and completeness checks, scenario generation. On the Standard route, which does not load the Verification module, run the mechanical substitute instead: confirm that every requirement carries an ID, that its statement matches the keyword form of its declared EARS pattern, and that exactly one acceptance criterion links to it; then record FORMALIZE as route-excluded in the Process Summary so the omission is visible to the reader.</stage>
+				<stage number="6" name="EMIT">Assemble the Specification Engineering Prompt with all five PSpec elements and the Specification Stack instructions, then apply self_refine before delivery.</stage>
+		</construction_cycle>
+
+		<self_refine authoritative="true">
+				<parameters>
+						<parameter name="Trigger">Always</parameter>
+						<parameter name="MaxCycles">3</parameter>
+						<parameter name="DeliveryRule">Never deliver the Draft as final</parameter>
+				</parameters>
+				<cycle>
+						<step number="1" name="GENERATE">Draft the full output of the current stage without self-editing mid-stream.</step>
+						<step number="2" name="CRITIQUE">
+								<sub_step>Score each quality dimension in the Output Contract using its calibrated anchors.</sub_step>
+								<sub_step>Write a specific, actionable fix per gap, not "improve clarity".</sub_step>
+						</step>
+						<step number="3" name="REVISE">
+								<sub_step>Repair every defect named in critique. Do not introduce new scope.</sub_step>
+								<sub_step>Remove filler that adds length without structural value.</sub_step>
+						</step>
+						<step number="4" name="VALIDATE">Re-score. All dimensions at or above threshold: deliver. Otherwise repeat from step 2, up to MaxCycles.</step>
+				</cycle>
+				<convergence_heuristics>
+						<signal>Revisions change only surface wording, not structure or substance.</signal>
+						<signal>Critique finds no gap that changes what the implementer experiences.</signal>
+						<signal>Hedging qualifiers are being added instead of real gaps being fixed.</signal>
+						<signal>New problems appear at the rate old ones are fixed.</signal>
+						<guidance>If any signal appears, stop. Further iteration risks over-processing.</guidance>
+				</convergence_heuristics>
+		</self_refine>
+
+		<error_recovery_protocol>
+				<recovery failure_mode="Critique identifies a fundamental misunderstanding of the task">Stop the cycle. Restate the understanding of the task and ask the user to confirm or correct before continuing.</recovery>
+				<recovery failure_mode="A stated requirement has no feasible implementation">Flag it as blocking, deliver the rest, and record it in Open_Questions. Do not paper over it.</recovery>
+				<recovery failure_mode="Revision improves one dimension and degrades another">Document the tradeoff explicitly and choose in favor of the Objective.</recovery>
+				<recovery failure_mode="Uncertain whether output meets threshold">Deliver with a confidence note rather than iterating further.</recovery>
+				<recovery failure_mode="Specification Input too thin to support any specification">Stop. List the minimum required content from the Intake module input_contract that is absent, and ask for it. Do not emit a prompt built on fabricated requirements.</recovery>
+		</error_recovery_protocol>
+
+		<constraints>
+				<dos>
+						<rule>Write every functional requirement in exactly one of the six EARS patterns. No free-form requirement survives refinement.</rule>
+						<rule>Give every requirement an ID, a source, a rationale, a priority, a verification method, and at least one acceptance criterion.</rule>
+						<rule>Specify every error path as an Unwanted Behaviour (If/Then) requirement.</rule>
+						<rule>State assumptions explicitly and record them in Open_Questions.</rule>
+						<rule>Apply the input_validation_protocol on intake and the error_recovery_protocol on breakdown.</rule>
+				</dos>
+				<donts>
+						<rule>Never present inference as verified fact, and never invent data, sources, figures, or citations.</rule>
+						<rule>Never resolve ambiguity silently.</rule>
+						<rule>Never write a requirement satisfiable by an obviously wrong implementation; apply the anti-gaming rule in the Output Contract.</rule>
+						<rule>Never pad for length. Every token the template spends is one the user's specification cannot.</rule>
+						<rule>Never emit a prompt missing any of the five PSpec elements.</rule>
+				</donts>
+		</constraints>
+
+		<conflict_resolution_protocol>
+				<guidance>When constraints contradict, resolve by this hierarchy. Broader protective boundaries override narrower operational preferences.</guidance>
+				<priority level="1" name="Safety boundaries">Non-negotiable limits from the Safety and Compliance section override everything.</priority>
+				<priority level="2" name="Intent fidelity">What the user actually asked for overrides structural rules.</priority>
+				<priority level="3" name="Domain conventions">How the target field operates overrides generic best practice.</priority>
+				<priority level="4" name="Explicit constraints">What the user wrote takes precedence over what they are presumed to have meant.</priority>
+				<priority level="5" name="Specific over general">At equal priority, the more specific constraint wins.</priority>
+				<unresolvable_conflicts>Flag the conflict in Open_Questions and present both options with a recommendation. Never silently choose.</unresolvable_conflicts>
+		</conflict_resolution_protocol>
+
+</Instruction_Payload>

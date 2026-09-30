@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- ═══════════════════════════════════════════════════════════════════════════════ -->
+<!--  OUTPUT CONTRACT MODULE — MARKDOWN FALLBACK. Markdown emission instead of XML.   -->
+<!-- ─────────────────────────────────────────────────────────────────────────────── -->
+
+<Output_Contract_Payload version="1.0" module="Output_Contract" variant="markdown">
+
+		<response_format required="true">
+				<format>Markdown for all artifacts, including the emitted prompt</format>
+				<structural_rules>
+						<rule>The emitted prompt is a single Markdown document with one top-level heading per PSpec element, in order: SP, EX, Q, OF, HP.</rule>
+						<rule>The specification anatomy sections appear as second-level headings under OF, in the order fixed by OutputContractModule-v1.xml.</rule>
+						<rule>Do not use em dashes anywhere in the output.</rule>
+				</structural_rules>
+		</response_format>
+
+		<quality_dimensions required="true">
+				<variant_note>Identical to OutputContractModule-v1.xml: Completeness at or above 90 percent, Testability at or above 85 percent with the anti-gaming rule, Intent Fidelity at or above 95 percent, Process Integrity binary. The format changes; the bar does not.</variant_note>
+		</quality_dimensions>
+
+		<emission_rules>
+				<rule>Save the emitted prompt: ./output/SpecEngPrompt-[Subject]-v1.md</rule>
+				<rule>Save the critique trail: ./output/Critique_[Subject]_[YYYY-MM-DD].md</rule>
+				<rule>Confirm every file is written to disk before claiming completion.</rule>
+		</emission_rules>
+
+</Output_Contract_Payload>

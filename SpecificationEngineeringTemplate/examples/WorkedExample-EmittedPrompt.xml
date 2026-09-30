@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- ═══════════════════════════════════════════════════════════════════════════════ -->
+<!--  WORKED EXAMPLE — what SpecificationEngineeringTemplate-v1.xml (v1.3) emits from -->
+<!--  examples/SampleUserSpecificationInput.md. This is the acceptance reference:     -->
+<!--  all five PSpec elements, EARS-only functional logic, and the three planted      -->
+<!--  defects surfaced in Open_Questions rather than silently resolved. Its critique  -->
+<!--  trail counterpart is WorkedExample-CritiqueTrail.md, which carries the route    -->
+<!--  decision (Complex: triggers T1, T2, T4 fired) and the stage record.             -->
+<!-- ─────────────────────────────────────────────────────────────────────────────── -->
+
+<Specification_Engineering_Prompt version="1.0" subject="InvoiceIntake" emitted_by="SpecificationEngineeringTemplate-v1.xml" template_version="1.3">
+
+		<SP name="System/Role Prompt">
+				<role>Senior Backend Engineer and Specification Executor for financial document processing under SOX controls</role>
+				<identity_traits>Precise, audit-minded, traceability-driven</identity_traits>
+				<prohibitions>
+						<rule>Must not invent or hallucinate data, vendors, schemas, or requirements.</rule>
+						<rule>Must not introduce libraries outside the approved stack.</rule>
+						<rule>Must not resolve the Open_Questions below silently; each needs an author decision or a recorded assumption.</rule>
+				</prohibitions>
+		</SP>
+
+		<EX name="Ordered illustrative examples">
+				<example order="1" case="common">
+						<input>A valid e-invoice XML from a known vendor, within the AP Clerk approval limit.</input>
+						<expected>Invoice extracted, validated, queued for payment; audit record written.</expected>
+				</example>
+				<example order="2" case="boundary">
+						<input>An invoice exactly at the AP Clerk approval limit.</input>
+						<expected>Routed to the clerk, not the manager; the boundary is documented in the acceptance criterion of REQ-APPR-001.</expected>
+				</example>
+				<example order="3" case="unwanted">
+						<input>A second upload of an invoice whose invoice number and vendor pair is already registered.</input>
+						<expected>Rejected as duplicate with reason code DUPLICATE; the original is untouched; an audit record is written.</expected>
+				</example>
+		</EX>
+
+		<Q name="The Query">
+				Produce the five-artifact Specification Stack for the Invoice Intake Service defined below, then implement and verify it task by task. Author CONSTITUTION.md first, then SPEC.md, PLAN.md, TASKS.md, and EVALS.md, committing each to version control before implementation begins. Resolve every Open Question with the author, or record the working assumption, before finalizing SPEC.md.
+		</Q>
+
+		<OF name="Output Schema/Format">
+				<specification_stack>
+						<artifact file="CONSTITUTION.md">SOX audit trail policy, approved stack (Python 3.12, FastAPI, PostgreSQL 16), test coverage floor, review gates.</artifact>
+						<artifact file="SPEC.md">The nine anatomy sections below, requirements carried verbatim.</artifact>
+						<artifact file="PLAN.md">Components, database schema, ERP integration contract, migrations, risks.</artifact>
+						<artifact file="TASKS.md">Atomic tasks, each citing the requirement IDs it implements and its verification hook.</artifact>
+						<artifact file="EVALS.md">The EX traces as the seed dataset, a failure taxonomy, and the extraction accuracy threshold.</artifact>
+				</specification_stack>
+				<anatomy>
+						<Objective>
+								Accept supplier invoices (PDF and e-invoice XML), validate them against vendor master data, and queue approved invoices for ERP payment. Actors: Supplier, AP Clerk, Finance Manager. Value: touchless processing of clean invoices with a SOX-compliant audit trail. Non-goals: payment execution, vendor onboarding, OCR model training.
+						</Objective>
+						<Contextual_Constraints>
+								Python 3.12, FastAPI, PostgreSQL 16. No additional runtime dependencies without sign-off. The service boundary ends at the ERP payment queue.
+						</Contextual_Constraints>
+						<Data_Contracts>
+								<contract name="InvoiceSubmission" direction="input">JSON schema: invoice_number (string, 1 to 64 chars), vendor_id (string, references vendor master), currency (ISO 4217 code), line_items (array, minimum 1), total (decimal, 2 places).</contract>
+								<contract name="ValidationResult" direction="output">JSON schema: status (accepted | rejected), reason_codes (array of string), requirement_ids (array of string).</contract>
+								<contract name="VendorMaster" direction="input">UNRESOLVED: the schema file vendor-master.json was referenced but not provided. See OQ-001.</contract>
+						</Data_Contracts>
+						<Functional_Logic syntax="EARS only">
+								<requirement id="REQ-INTK-001" pattern="Event-Driven" priority="P1" verification="Test" source="feature list item 1 and 2" rationale="Extraction is the entry condition for every downstream behavior.">When an invoice is submitted through the portal or by email, the Invoice Intake Service shall extract invoice number, vendor, currency, line items, and totals.</requirement>
+								<requirement id="REQ-VAL-001" pattern="Event-Driven" priority="P1" verification="Test" source="feature list item 3" rationale="Vendor validation is the stated control against paying unknown parties.">When extraction completes, the Invoice Intake Service shall validate the invoice against the vendor master data.</requirement>
+								<requirement id="REQ-VAL-002" pattern="Unwanted Behaviour" priority="P1" verification="Test" source="feature list item 4" rationale="Duplicate payment is the highest-cost failure in accounts payable.">If a submitted invoice carries an invoice number and vendor pair that already exists, then the Invoice Intake Service shall reject the submission with reason code DUPLICATE.</requirement>
+								<requirement id="REQ-VAL-003" pattern="Unwanted Behaviour" priority="P1" verification="Test" source="users list, AP Clerk role" rationale="Extraction failures need a human path; silent drops violate SOX traceability.">If extraction fails on any required field, then the Invoice Intake Service shall place the submission in the AP Clerk review queue with the failed fields named.</requirement>
+								<requirement id="REQ-APPR-001" pattern="State-Driven" priority="P1" verification="Test" source="feature list item 8" rationale="Segregation of duties above the clerk limit is a SOX control.">While an invoice total exceeds the AP Clerk approval limit, the Invoice Intake Service shall withhold the invoice from the payment queue until a Finance Manager approval is recorded.</requirement>
+								<requirement id="REQ-QUE-001" pattern="Complex" priority="P1" verification="Test" source="feature list item 5" rationale="Queueing is the service's terminal success state.">While an invoice is validated, When its required approval is recorded, the Invoice Intake Service shall queue the invoice for payment in the ERP.</requirement>
+								<requirement id="REQ-AUD-001" pattern="Ubiquitous" priority="P1" verification="Inspection" source="notes, SOX controls" rationale="The audit trail must hold for every path, not only the happy path.">The Invoice Intake Service shall write an append-only audit record for every state change of every invoice.</requirement>
+								<requirement id="REQ-PERF-001" pattern="Event-Driven" priority="P2" verification="Test" source="feature list item 7" rationale="Stated as a need but unquantified; held in draft." status="draft">When an invoice is submitted, the Invoice Intake Service shall complete extraction and validation within a bounded time. UNQUANTIFIED: see OQ-003.</requirement>
+								<requirement id="REQ-ARCH-001" pattern="State-Driven" priority="P3" verification="Analysis" source="feature list item 6" rationale="Stated as a need but undefined; held in draft." status="draft">While an invoice meets the archival condition, the Invoice Intake Service shall archive it. AMBIGUOUS: see OQ-002.</requirement>
+						</Functional_Logic>
+						<AI_Behavior_and_Guardrails>
+								Tool permissions: repository read and write, test execution, database migration in development only. Response format: every change references the requirement IDs it implements. Escalation: any change touching audit or approval logic requires human review before merge; confidence below high on a SOX-relevant decision escalates to the author. Prohibited: inventing or hallucinating data, schemas, vendors, or requirements.
+						</AI_Behavior_and_Guardrails>
+						<Safety_and_Compliance>
+								SOX scope: the approval and audit paths. PII: vendor bank details are masked in logs and in the review queue. Access controls: AP Clerks read their own queue; Finance Managers read all queues. Audit log structure: actor, action, invoice id, timestamp, prior state, new state. Human approval gate: REQ-APPR-001 is never automated.
+						</Safety_and_Compliance>
+						<Acceptance_Criteria>
+								<criterion requirement="REQ-VAL-002">Submitting the same invoice number and vendor pair twice yields exactly one stored invoice and one DUPLICATE rejection.</criterion>
+								<criterion requirement="REQ-APPR-001">An invoice one cent above the AP Clerk limit never reaches the payment queue without a Finance Manager approval record.</criterion>
+								<criterion requirement="REQ-QUE-001">Every validated and approved invoice appears in the ERP payment queue exactly once.</criterion>
+								<criterion requirement="REQ-AUD-001">In a full happy-path run, the count of audit rows equals the count of state transitions.</criterion>
+						</Acceptance_Criteria>
+						<Validation_and_Evals_Plan>
+								Unit tests per extraction field and validation rule. Integration tests across the portal, email, and ERP boundaries. End-to-end tests for the happy path plus the three EX traces. Adversarial regression: a malformed PDF, a forged duplicate with altered whitespace, and the approval limit boundary. EVALS.md thresholds: extraction accuracy at or above 99 percent on the seed dataset; zero silent failures across the regression suite.
+						</Validation_and_Evals_Plan>
+						<Open_Questions>
+								<question id="OQ-001" type="missing input">vendor-master.json was referenced but not provided. The VendorMaster data contract and REQ-VAL-001 cannot be finalized without it.</question>
+								<question id="OQ-002" type="ambiguity">"Old invoices are archived" does not define old, the archival trigger, or the destination. REQ-ARCH-001 is held in draft until answered.</question>
+								<question id="OQ-003" type="unquantified">"Processing must be fast" carries no number. Proposal: 95th percentile extraction plus validation under 30 seconds; confirm or replace. REQ-PERF-001 is held in draft until quantified.</question>
+						</Open_Questions>
+				</anatomy>
+		</OF>
+
+		<HP name="Hyperparameters">
+				<parameter name="temperature">0.2</parameter>
+				<parameter name="seed">fixed where the runtime supports it</parameter>
+				<parameter name="max_output_tokens">explicit per run; no unbounded generation</parameter>
+		</HP>
+
+</Specification_Engineering_Prompt>
