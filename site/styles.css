@@ -8,6 +8,7 @@
 	--accent-ink: #ffffff;
 	--mine: #e4ece6;
 	--theirs: #ffffff;
+	--selected: #e9e5dc;
 	--danger: #9a2f22;
 	--radius: 10px;
 	color-scheme: light dark;
@@ -24,6 +25,7 @@
 		--accent-ink: #12150f;
 		--mine: #26332b;
 		--theirs: #1e201d;
+		--selected: #2a2c27;
 		--danger: #f0958a;
 	}
 }
@@ -62,6 +64,8 @@ body {
 
 .field:focus-visible,
 .button:focus-visible,
+.link-button:focus-visible,
+.conv-item:focus-visible,
 .thread:focus-visible {
 	outline: 2px solid var(--accent);
 	outline-offset: 2px;
@@ -74,6 +78,7 @@ body {
 	font: inherit;
 	font-weight: 600;
 	cursor: pointer;
+	white-space: nowrap;
 }
 
 .button:disabled { opacity: 0.55; cursor: default; }
@@ -88,6 +93,26 @@ body {
 	font-weight: 500;
 }
 
+.button-quiet.is-on { background: var(--selected); }
+
+.button-danger {
+	padding: 6px 12px;
+	border-color: var(--danger);
+	background: transparent;
+	color: var(--danger);
+	font-weight: 500;
+}
+
+.link-button {
+	padding: 0;
+	border: 0;
+	background: none;
+	color: inherit;
+	font: inherit;
+	text-decoration: underline;
+	cursor: pointer;
+}
+
 .status {
 	min-height: 1.5em;
 	margin: 0;
@@ -96,6 +121,8 @@ body {
 }
 
 .status.is-error { color: var(--danger); }
+
+.hint { margin: 6px 0 0; color: var(--muted); font-size: 0.85rem; }
 
 /* Lock screen */
 
@@ -114,30 +141,118 @@ body {
 
 .lock-label { color: var(--muted); font-size: 0.9rem; }
 
-/* Portal */
+/* Portal: a single pane for the other person; list plus pane for the admin. */
 
 .portal {
 	height: 100%;
 	max-width: 760px;
 	margin: 0 auto;
 	display: grid;
-	grid-template-rows: auto 1fr auto;
+	grid-template-columns: minmax(0, 1fr);
 }
+
+.portal.is-admin {
+	max-width: 1100px;
+	grid-template-columns: 300px minmax(0, 1fr);
+}
+
+.sidebar {
+	min-height: 0;
+	display: grid;
+	grid-template-rows: auto 1fr auto;
+	border-right: 1px solid var(--line);
+}
+
+.sidebar-head,
+.sidebar-foot {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	padding: 12px 16px;
+}
+
+.sidebar-head { border-bottom: 1px solid var(--line); }
+
+.sidebar-foot { border-top: 1px solid var(--line); }
+
+.sidebar-title { margin: 0; font-size: 1rem; }
+
+.conv-list {
+	min-height: 0;
+	overflow-y: auto;
+	margin: 0;
+	padding: 8px;
+	list-style: none;
+}
+
+.conv-item {
+	width: 100%;
+	display: grid;
+	gap: 2px;
+	padding: 10px 12px;
+	border: 0;
+	border-radius: var(--radius);
+	background: transparent;
+	color: var(--ink);
+	font: inherit;
+	text-align: left;
+	cursor: pointer;
+}
+
+.conv-item:hover { background: var(--selected); }
+
+.conv-item.is-selected { background: var(--selected); font-weight: 600; }
+
+.conv-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.conv-meta { color: var(--muted); font-size: 0.8rem; font-weight: 400; }
+
+.conv-empty { padding: 12px; color: var(--muted); font-size: 0.9rem; }
+
+/* Flex, not grid rows: the archived banner is often hidden, which would shift
+   every following child into the wrong row. */
+.pane {
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
+}
+
+.pane > .thread { flex: 1; }
 
 .bar {
 	display: flex;
 	align-items: center;
-	justify-content: space-between;
 	gap: 12px;
 	padding: 12px 16px;
 	border-bottom: 1px solid var(--line);
 }
 
-.bar-actions { display: flex; gap: 8px; }
+.bar-text { min-width: 0; flex: 1; display: grid; }
+
+.pane-title {
+	margin: 0;
+	overflow: hidden;
+	font-size: 1rem;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.pane-title:empty { display: none; }
+
+.bar-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 
 .sync { color: var(--muted); font-size: 0.85rem; }
 
 .sync.is-error { color: var(--danger); }
+
+.banner {
+	margin: 0;
+	padding: 8px 16px;
+	border-bottom: 1px solid var(--line);
+	background: var(--selected);
+	font-size: 0.9rem;
+}
 
 .thread {
 	min-height: 0;
@@ -168,6 +283,8 @@ body {
 	background: var(--mine);
 }
 
+.message.is-hidden { opacity: 0.6; border-style: dashed; }
+
 .message-body {
 	margin: 0;
 	white-space: pre-wrap;
@@ -179,6 +296,18 @@ body {
 	color: var(--muted);
 	font-size: 0.78rem;
 }
+
+.message-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 12px;
+	margin-top: 6px;
+	font-size: 0.8rem;
+}
+
+.message-actions .link-button { color: var(--muted); }
+
+.message-actions .link-button.is-danger { color: var(--danger); }
 
 .compose {
 	padding: 12px 16px 16px;
@@ -196,10 +325,26 @@ body {
 	gap: 12px;
 }
 
-/* Password dialog */
+/* Phones: the admin sees the list or a conversation, one at a time. */
+
+@media (min-width: 721px) {
+	.back { display: none; }
+}
+
+@media (max-width: 720px) {
+	.portal.is-admin { grid-template-columns: minmax(0, 1fr); }
+	.portal.is-admin .sidebar { border-right: 0; }
+	.portal.is-admin.show-list .pane { display: none; }
+	.portal.is-admin:not(.show-list) .sidebar { display: none !important; }
+	.bar { flex-wrap: wrap; }
+	.bar-text { order: -1; flex-basis: 100%; }
+	.bar-actions { margin-left: auto; }
+}
+
+/* Dialogs */
 
 .dialog {
-	width: min(calc(100% - 32px), 380px);
+	width: min(calc(100% - 32px), 400px);
 	padding: 20px;
 	border: 1px solid var(--line);
 	border-radius: var(--radius);
@@ -220,7 +365,11 @@ body {
 
 .dialog-row {
 	display: flex;
-	justify-content: flex-end;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: space-between;
 	gap: 8px;
 	margin-top: 8px;
 }
+
+.dialog-row-end { display: flex; gap: 8px; margin-left: auto; }

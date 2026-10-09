@@ -28,6 +28,16 @@ try {
 	Copy-Item (Join-Path $site '*') $work -Recurse -Force
 	New-Item -ItemType File -Path (Join-Path $work '.nojekyll') -Force | Out-Null
 
+	# Browsers keep Pages files for ten minutes. Stamp each file reference with this
+	# deploy's version so a new index.html never pairs with a stale script or config.
+	$version = [DateTime]::UtcNow.ToString('yyyyMMddHHmmss')
+	$index = Join-Path $work 'index.html'
+	$html = Get-Content $index -Raw
+	foreach ($file in 'styles.css', 'config.js', 'app.js') {
+		$html = $html.Replace("`"$file`"", "`"$file`?v=$version`"")
+	}
+	Set-Content -Path $index -Value $html -NoNewline
+
 	git -C $work init --quiet --initial-branch $Branch
 	if ($LASTEXITCODE -ne 0) { throw 'git init failed.' }
 	git -C $work add --all

@@ -1,34 +1,43 @@
--- Tripp version 1.0 database.
+-- Tripp database, version 2.
 --
 -- Access model: there are no Supabase Auth users. The browser holds only the
--- project's publishable key and can call the five functions at the bottom of
+-- project's publishable key and can call the ten m_* functions at the bottom of
 -- this file, nothing else. Every table lives in the private schema `tripp`,
 -- which the Data API does not expose. Each function checks a password or a
 -- session token itself before it touches a row.
 --
--- The five public functions are SECURITY DEFINER on purpose: they are the
--- whole API, and the password or token check in each body stands where an
--- auth.uid() check would normally be. The security advisor will flag them.
+-- People: one admin, plus any number of conversations. Each conversation has
+-- its own password, and a password alone decides who is signing in, so no two
+-- passwords may be the same. A conversation's password opens that conversation
+-- and nothing else. The admin password opens the list of all conversations.
 --
--- Safe to run more than once. It never overwrites a password that is set.
+-- The public functions are SECURITY DEFINER on purpose: they are the whole
+-- API, and the password or token check in each body stands where an auth.uid()
+-- check would normally be. The security advisor will flag them.
+--
+-- Safe to run more than once. A version 1 database (tripp.keys with an owner
+-- and a guest) is migrated in place: the owner password becomes the admin
+-- password, the guest password and every existing message become
+-- "Conversation 1". Open sessions are ended by the migration.
 
 create extension if not exists pgcrypto with schema extensions;
 
 create schema if not exists tripp;
 revoke all on schema tripp from public, anon, authenticated;
 
--- One row per person. `role` is 'owner' or 'guest'. No names are stored.
-create table if not exists tripp.keys (
-	role text primary key check (role in ('owner', 'guest')),
+create table if not exists tripp.admin_key (
+	id int primary key default 1 check (id = 1),
 	hash text not null,
 	changed_at timestamptz not null default now()
 );
 
-create table if not exists tripp.sessions (
-	token_hash text primary key,
-	role text not null references tripp.keys (role),
+-- `label` is seen only by the admin. The other person never sees it.
+create table if not exists tripp.conversations (
+	id bigint generated always as identity primary key,
+	label text not null check (char_length(label) between 1 and 100),
+	hash text not null,
 	created_at timestamptz not null default now(),
-	last_seen timestamptz not null default now()
+	changed_at timestamptz not null default now()
 );
 
 create table if not exists tripp.messages (
@@ -37,6 +46,12 @@ create table if not exists tripp.messages (
 	body text not null check (char_length(body) between 1 and 10000),
 	created_at timestamptz not null default now()
 );
+-- author 'owner' is the admin; 'guest' is the conversation's other person.
+-- hidden: the other person cannot see it; the admin still can.
+-- archived: out of the conversation for both; the admin sees it under Archived.
+alter table tripp.messages add column if not exists conversation_id bigint references tripp.conversations (id) on delete cascade;
+alter table tripp.messages add column if not exists hidden boolean not null default false;
+alter table tripp.messages add column if not exists archived boolean not null default false;
 
 -- Failed unlock attempts, kept only to throttle guessing.
 create table if not exists tripp.attempts (
@@ -46,11 +61,54 @@ create table if not exists tripp.attempts (
 );
 create index if not exists attempts_ip_at on tripp.attempts (ip, at);
 
+-- Version 1 to version 2.
+do $$
+declare
+	v_conversation bigint;
+begin
+	if exists (select 1 from information_schema.columns
+	            where table_schema = 'tripp' and table_name = 'sessions' and column_name = 'role') then
+		drop table tripp.sessions;
+	end if;
+	if to_regclass('tripp.keys') is not null then
+		insert into tripp.admin_key (id, hash)
+		select 1, hash from tripp.keys where role = 'owner'
+		on conflict (id) do nothing;
+		if exists (select 1 from tripp.keys where role = 'guest')
+		   and not exists (select 1 from tripp.conversations) then
+			insert into tripp.conversations (label, hash)
+			select 'Conversation 1', hash from tripp.keys where role = 'guest'
+			returning id into v_conversation;
+			update tripp.messages set conversation_id = v_conversation where conversation_id is null;
+		end if;
+		drop table tripp.keys;
+	end if;
+end;
+$$;
+
+alter table tripp.messages alter column conversation_id set not null;
+create index if not exists messages_conversation on tripp.messages (conversation_id, id);
+
+-- conversation_id null means an admin session.
+create table if not exists tripp.sessions (
+	token_hash text primary key,
+	conversation_id bigint references tripp.conversations (id) on delete cascade,
+	created_at timestamptz not null default now(),
+	last_seen timestamptz not null default now()
+);
+
 -- Defence in depth: no policies, so nothing but the table owner reads these.
-alter table tripp.keys enable row level security;
-alter table tripp.sessions enable row level security;
+alter table tripp.admin_key enable row level security;
+alter table tripp.conversations enable row level security;
 alter table tripp.messages enable row level security;
+alter table tripp.sessions enable row level security;
 alter table tripp.attempts enable row level security;
+
+-- Version 1 functions whose signatures changed.
+drop function if exists public.m_list(text);
+drop function if exists public.m_post(text, text);
+drop function if exists public.m_setkey(text, text, text);
+drop function if exists tripp.session_role(text);
 
 -- Internal: the caller's address as the API gateway reports it.
 create or replace function tripp.client_ip() returns text
@@ -63,31 +121,59 @@ as $$
 		'unknown');
 $$;
 
--- Internal: resolve a session token to its role, or null if it is unknown,
--- idle for more than 30 minutes, or older than 12 hours. Touches last_seen.
-create or replace function tripp.session_role(p_token text) returns text
+create or replace function tripp.token_hash(p_token text) returns text
+language sql immutable set search_path = ''
+as $$
+	select encode(sha256(convert_to(coalesce(p_token, ''), 'UTF8')), 'hex');
+$$;
+
+-- Internal: resolve a session token. Returns 0 for the admin, the conversation
+-- id for anyone else, or null if the token is unknown, idle for more than 30
+-- minutes, or older than 12 hours. Touches last_seen.
+create or replace function tripp.session_scope(p_token text) returns bigint
 language plpgsql volatile set search_path = ''
 as $$
 declare
-	v_role text;
+	v_found boolean;
+	v_conversation bigint;
 begin
 	if p_token is null or p_token = '' then
 		return null;
 	end if;
 	update tripp.sessions
 	   set last_seen = now()
-	 where token_hash = encode(sha256(convert_to(p_token, 'UTF8')), 'hex')
+	 where token_hash = tripp.token_hash(p_token)
 	   and last_seen > now() - interval '30 minutes'
 	   and created_at > now() - interval '12 hours'
-	returning role into v_role;
-	return v_role;
+	returning true, conversation_id into v_found, v_conversation;
+	if not coalesce(v_found, false) then
+		return null;
+	end if;
+	return coalesce(v_conversation, 0);
 end;
 $$;
 
-revoke all on function tripp.client_ip() from public, anon, authenticated;
-revoke all on function tripp.session_role(text) from public, anon, authenticated;
+-- Internal: is this password already somebody's? Skips the admin key when
+-- p_skip_admin is true and the conversation p_skip_conversation, so a password
+-- can be set to its own current value.
+create or replace function tripp.password_taken(p_password text, p_skip_admin boolean, p_skip_conversation bigint)
+returns boolean
+language sql stable set search_path = ''
+as $$
+	select (not p_skip_admin and exists (
+				select 1 from tripp.admin_key a where a.hash = extensions.crypt(p_password, a.hash)))
+		or exists (
+				select 1 from tripp.conversations c
+				 where c.id is distinct from p_skip_conversation
+				   and c.hash = extensions.crypt(p_password, c.hash));
+$$;
 
--- API 1 of 5: exchange a password for a session token.
+revoke all on function tripp.client_ip() from public, anon, authenticated;
+revoke all on function tripp.token_hash(text) from public, anon, authenticated;
+revoke all on function tripp.session_scope(text) from public, anon, authenticated;
+revoke all on function tripp.password_taken(text, boolean, bigint) from public, anon, authenticated;
+
+-- API: exchange a password for a session token.
 -- Eight wrong tries from one address inside 15 minutes locks that address out
 -- until the oldest of them is 15 minutes old. A failure returns a result
 -- rather than raising, so the attempt row is kept.
@@ -96,7 +182,8 @@ language plpgsql volatile security definer set search_path = ''
 as $$
 declare
 	v_ip text := tripp.client_ip();
-	v_role text;
+	v_admin boolean := false;
+	v_conversation bigint;
 	v_token text;
 begin
 	delete from tripp.attempts where at < now() - interval '1 day';
@@ -110,56 +197,96 @@ begin
 	end if;
 
 	if p_password is not null and p_password <> '' then
-		select k.role into v_role
-		  from tripp.keys k
-		 where k.hash = extensions.crypt(p_password, k.hash)
-		 limit 1;
+		v_admin := exists (select 1 from tripp.admin_key a where a.hash = extensions.crypt(p_password, a.hash));
+		if not v_admin then
+			select c.id into v_conversation
+			  from tripp.conversations c
+			 where c.hash = extensions.crypt(p_password, c.hash)
+			 limit 1;
+		end if;
 	end if;
 
-	if v_role is null then
+	if not v_admin and v_conversation is null then
 		insert into tripp.attempts (ip) values (v_ip);
 		return json_build_object('ok', false, 'error', 'denied');
 	end if;
 
 	v_token := encode(extensions.gen_random_bytes(32), 'hex');
-	insert into tripp.sessions (token_hash, role)
-	values (encode(sha256(convert_to(v_token, 'UTF8')), 'hex'), v_role);
+	insert into tripp.sessions (token_hash, conversation_id)
+	values (tripp.token_hash(v_token), v_conversation);
 	delete from tripp.attempts where ip = v_ip;
 
-	return json_build_object('ok', true, 'token', v_token, 'role', v_role);
+	return json_build_object('ok', true, 'token', v_token,
+		'role', case when v_admin then 'admin' else 'guest' end);
 end;
 $$;
 
--- API 2 of 5: read the thread, oldest first. `mine` is relative to the caller.
-create or replace function public.m_list(p_token text) returns json
+-- API: read a conversation, oldest first. `mine` is relative to the caller.
+-- The other person gets their own conversation, without hidden or archived
+-- messages. The admin names the conversation and picks the active or the
+-- archived messages, and also gets each message's hidden flag.
+create or replace function public.m_list(p_token text, p_conversation bigint default null, p_archived boolean default false)
+returns json
 language plpgsql volatile security definer set search_path = ''
 as $$
 declare
-	v_role text := tripp.session_role(p_token);
+	v_scope bigint := tripp.session_scope(p_token);
 begin
-	if v_role is null then
+	if v_scope is null then
 		return json_build_object('ok', false, 'error', 'expired');
 	end if;
-	return json_build_object('ok', true, 'role', v_role, 'messages', (
-		select coalesce(json_agg(json_build_object(
-			'id', m.id,
-			'mine', m.author = v_role,
-			'body', m.body,
-			'at', m.created_at) order by m.id), '[]'::json)
-		  from tripp.messages m));
+
+	if v_scope > 0 then
+		return json_build_object('ok', true, 'role', 'guest', 'messages', (
+			select coalesce(json_agg(json_build_object(
+				'id', m.id,
+				'mine', m.author = 'guest',
+				'body', m.body,
+				'at', m.created_at) order by m.id), '[]'::json)
+			  from tripp.messages m
+			 where m.conversation_id = v_scope
+			   and not m.hidden
+			   and not m.archived));
+	end if;
+
+	if not exists (select 1 from tripp.conversations c where c.id = p_conversation) then
+		return json_build_object('ok', false, 'error', 'no_conversation');
+	end if;
+	return json_build_object('ok', true, 'role', 'admin',
+		'label', (select c.label from tripp.conversations c where c.id = p_conversation),
+		'archived_count', (select count(*) from tripp.messages m
+		                    where m.conversation_id = p_conversation and m.archived),
+		'messages', (
+			select coalesce(json_agg(json_build_object(
+				'id', m.id,
+				'mine', m.author = 'owner',
+				'body', m.body,
+				'at', m.created_at,
+				'hidden', m.hidden,
+				'archived', m.archived) order by m.id), '[]'::json)
+			  from tripp.messages m
+			 where m.conversation_id = p_conversation
+			   and m.archived = coalesce(p_archived, false)));
 end;
 $$;
 
--- API 3 of 5: leave a message.
-create or replace function public.m_post(p_token text, p_body text) returns json
+-- API: leave a message. The admin names the conversation; anyone else posts
+-- to their own.
+create or replace function public.m_post(p_token text, p_body text, p_conversation bigint default null)
+returns json
 language plpgsql volatile security definer set search_path = ''
 as $$
 declare
-	v_role text := tripp.session_role(p_token);
+	v_scope bigint := tripp.session_scope(p_token);
 	v_body text := btrim(coalesce(p_body, ''), E' \t\r\n');
+	v_target bigint;
 begin
-	if v_role is null then
+	if v_scope is null then
 		return json_build_object('ok', false, 'error', 'expired');
+	end if;
+	v_target := case when v_scope > 0 then v_scope else p_conversation end;
+	if not exists (select 1 from tripp.conversations c where c.id = v_target) then
+		return json_build_object('ok', false, 'error', 'no_conversation');
 	end if;
 	if char_length(v_body) = 0 then
 		return json_build_object('ok', false, 'error', 'empty');
@@ -167,61 +294,186 @@ begin
 	if char_length(v_body) > 10000 then
 		return json_build_object('ok', false, 'error', 'too_long');
 	end if;
-	insert into tripp.messages (author, body) values (v_role, v_body);
+	insert into tripp.messages (conversation_id, author, body)
+	values (v_target, case when v_scope > 0 then 'guest' else 'owner' end, v_body);
 	return json_build_object('ok', true);
 end;
 $$;
 
--- API 4 of 5: end the session.
+-- API: end the session.
 create or replace function public.m_close(p_token text) returns json
 language plpgsql volatile security definer set search_path = ''
 as $$
 begin
-	delete from tripp.sessions
-	 where token_hash = encode(sha256(convert_to(coalesce(p_token, ''), 'UTF8')), 'hex');
+	delete from tripp.sessions where token_hash = tripp.token_hash(p_token);
 	return json_build_object('ok', true);
 end;
 $$;
 
--- API 5 of 5: set either password. Owner sessions only. The two passwords
--- must differ, because the password alone decides who is signing in.
--- Changing a password ends every other session for that role.
-create or replace function public.m_setkey(p_token text, p_role text, p_new text) returns json
+-- API, admin only: every conversation, most recent activity first.
+create or replace function public.m_convs(p_token text) returns json
 language plpgsql volatile security definer set search_path = ''
 as $$
 declare
-	v_role text := tripp.session_role(p_token);
+	v_scope bigint := tripp.session_scope(p_token);
 begin
-	if v_role is null then
+	if v_scope is null then
 		return json_build_object('ok', false, 'error', 'expired');
 	end if;
-	if v_role <> 'owner' then
+	if v_scope <> 0 then
 		return json_build_object('ok', false, 'error', 'forbidden');
 	end if;
-	if p_role is null or p_role not in ('owner', 'guest') then
-		return json_build_object('ok', false, 'error', 'bad_role');
+	return json_build_object('ok', true, 'conversations', (
+		select coalesce(json_agg(row_to_json(x) order by x.last_at desc nulls last, x.id desc), '[]'::json)
+		  from (
+			select c.id,
+			       c.label,
+			       c.created_at,
+			       (select max(m.created_at) from tripp.messages m
+			         where m.conversation_id = c.id and not m.archived) as last_at,
+			       (select m.author = 'guest' from tripp.messages m
+			         where m.conversation_id = c.id and not m.archived
+			         order by m.id desc limit 1) as last_from_them,
+			       (select count(*) from tripp.messages m
+			         where m.conversation_id = c.id and not m.archived) as active_count,
+			       (select count(*) from tripp.messages m
+			         where m.conversation_id = c.id and m.archived) as archived_count
+			  from tripp.conversations c
+		  ) x));
+end;
+$$;
+
+-- API, admin only: create a conversation (p_id null) or change one. On a
+-- change, a null or empty label or password leaves that field as it is. A new
+-- password ends the other person's open sessions.
+create or replace function public.m_conv_save(p_token text, p_id bigint, p_label text, p_password text)
+returns json
+language plpgsql volatile security definer set search_path = ''
+as $$
+declare
+	v_scope bigint := tripp.session_scope(p_token);
+	v_label text := btrim(coalesce(p_label, ''));
+	v_id bigint;
+begin
+	if v_scope is null then
+		return json_build_object('ok', false, 'error', 'expired');
 	end if;
-	-- No length or composition rules: the owner's chosen password is accepted as given.
+	if v_scope <> 0 then
+		return json_build_object('ok', false, 'error', 'forbidden');
+	end if;
+	if char_length(v_label) > 100 then
+		return json_build_object('ok', false, 'error', 'label_too_long');
+	end if;
+	if p_password is not null and p_password <> ''
+	   and tripp.password_taken(p_password, false, p_id) then
+		return json_build_object('ok', false, 'error', 'password_taken');
+	end if;
+
+	if p_id is null then
+		if v_label = '' then
+			return json_build_object('ok', false, 'error', 'label_empty');
+		end if;
+		if p_password is null or p_password = '' then
+			return json_build_object('ok', false, 'error', 'empty_key');
+		end if;
+		insert into tripp.conversations (label, hash)
+		values (v_label, extensions.crypt(p_password, extensions.gen_salt('bf', 10)))
+		returning id into v_id;
+		return json_build_object('ok', true, 'id', v_id);
+	end if;
+
+	if not exists (select 1 from tripp.conversations c where c.id = p_id) then
+		return json_build_object('ok', false, 'error', 'no_conversation');
+	end if;
+	if v_label <> '' then
+		update tripp.conversations set label = v_label, changed_at = now() where id = p_id;
+	end if;
+	if p_password is not null and p_password <> '' then
+		update tripp.conversations
+		   set hash = extensions.crypt(p_password, extensions.gen_salt('bf', 10)), changed_at = now()
+		 where id = p_id;
+		delete from tripp.sessions where conversation_id = p_id;
+	end if;
+	return json_build_object('ok', true, 'id', p_id);
+end;
+$$;
+
+-- API, admin only: delete a conversation, its messages, and its password.
+create or replace function public.m_conv_delete(p_token text, p_id bigint) returns json
+language plpgsql volatile security definer set search_path = ''
+as $$
+declare
+	v_scope bigint := tripp.session_scope(p_token);
+begin
+	if v_scope is null then
+		return json_build_object('ok', false, 'error', 'expired');
+	end if;
+	if v_scope <> 0 then
+		return json_build_object('ok', false, 'error', 'forbidden');
+	end if;
+	delete from tripp.conversations where id = p_id;
+	if not found then
+		return json_build_object('ok', false, 'error', 'no_conversation');
+	end if;
+	return json_build_object('ok', true);
+end;
+$$;
+
+-- API, admin only: hide, unhide, archive, unarchive, or delete one message.
+create or replace function public.m_msg(p_token text, p_id bigint, p_action text) returns json
+language plpgsql volatile security definer set search_path = ''
+as $$
+declare
+	v_scope bigint := tripp.session_scope(p_token);
+begin
+	if v_scope is null then
+		return json_build_object('ok', false, 'error', 'expired');
+	end if;
+	if v_scope <> 0 then
+		return json_build_object('ok', false, 'error', 'forbidden');
+	end if;
+	if p_action = 'delete' then
+		delete from tripp.messages where id = p_id;
+	elsif p_action in ('hide', 'unhide') then
+		update tripp.messages set hidden = (p_action = 'hide') where id = p_id;
+	elsif p_action in ('archive', 'unarchive') then
+		update tripp.messages set archived = (p_action = 'archive') where id = p_id;
+	else
+		return json_build_object('ok', false, 'error', 'bad_action');
+	end if;
+	if not found then
+		return json_build_object('ok', false, 'error', 'no_message');
+	end if;
+	return json_build_object('ok', true);
+end;
+$$;
+
+-- API, admin only: change the admin password. Ends every other admin session.
+create or replace function public.m_admin_key(p_token text, p_new text) returns json
+language plpgsql volatile security definer set search_path = ''
+as $$
+declare
+	v_scope bigint := tripp.session_scope(p_token);
+begin
+	if v_scope is null then
+		return json_build_object('ok', false, 'error', 'expired');
+	end if;
+	if v_scope <> 0 then
+		return json_build_object('ok', false, 'error', 'forbidden');
+	end if;
+	-- No length or composition rules: the admin's chosen password is accepted as given.
 	if p_new is null or p_new = '' then
 		return json_build_object('ok', false, 'error', 'empty_key');
 	end if;
-	if exists (select 1 from tripp.keys k
-	            where k.role <> p_role and k.hash = extensions.crypt(p_new, k.hash)) then
-		return json_build_object('ok', false, 'error', 'same_as_other');
+	if tripp.password_taken(p_new, true, null) then
+		return json_build_object('ok', false, 'error', 'password_taken');
 	end if;
-
-	update tripp.keys
-	   set hash = extensions.crypt(p_new, extensions.gen_salt('bf', 10)),
-	       changed_at = now()
-	 where role = p_role;
-	if not found then
-		return json_build_object('ok', false, 'error', 'bad_role');
-	end if;
-
+	update tripp.admin_key
+	   set hash = extensions.crypt(p_new, extensions.gen_salt('bf', 10)), changed_at = now()
+	 where id = 1;
 	delete from tripp.sessions
-	 where role = p_role
-	   and token_hash <> encode(sha256(convert_to(p_token, 'UTF8')), 'hex');
-
+	 where conversation_id is null
+	   and token_hash <> tripp.token_hash(p_token);
 	return json_build_object('ok', true);
 end;
 $$;
@@ -229,13 +481,23 @@ $$;
 -- Postgres grants EXECUTE to PUBLIC on every new function. Take that away and
 -- grant only what the browser needs.
 revoke all on function public.m_open(text) from public;
-revoke all on function public.m_list(text) from public;
-revoke all on function public.m_post(text, text) from public;
+revoke all on function public.m_list(text, bigint, boolean) from public;
+revoke all on function public.m_post(text, text, bigint) from public;
 revoke all on function public.m_close(text) from public;
-revoke all on function public.m_setkey(text, text, text) from public;
+revoke all on function public.m_convs(text) from public;
+revoke all on function public.m_conv_save(text, bigint, text, text) from public;
+revoke all on function public.m_conv_delete(text, bigint) from public;
+revoke all on function public.m_msg(text, bigint, text) from public;
+revoke all on function public.m_admin_key(text, text) from public;
 
 grant execute on function public.m_open(text) to anon, authenticated;
-grant execute on function public.m_list(text) to anon, authenticated;
-grant execute on function public.m_post(text, text) to anon, authenticated;
+grant execute on function public.m_list(text, bigint, boolean) to anon, authenticated;
+grant execute on function public.m_post(text, text, bigint) to anon, authenticated;
 grant execute on function public.m_close(text) to anon, authenticated;
-grant execute on function public.m_setkey(text, text, text) to anon, authenticated;
+grant execute on function public.m_convs(text) to anon, authenticated;
+grant execute on function public.m_conv_save(text, bigint, text, text) to anon, authenticated;
+grant execute on function public.m_conv_delete(text, bigint) to anon, authenticated;
+grant execute on function public.m_msg(text, bigint, text) to anon, authenticated;
+grant execute on function public.m_admin_key(text, text) to anon, authenticated;
+
+notify pgrst, 'reload schema';
