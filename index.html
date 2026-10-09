@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<meta name="robots" content="noindex, nofollow, noarchive">
+	<meta name="referrer" content="no-referrer">
+	<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src https://*.supabase.co; base-uri 'none'; form-action 'none'">
+	<title>Sign in</title>
+	<link rel="stylesheet" href="styles.css?v=20261009221112">
+</head>
+<body>
+
+	<main id="lock" class="lock">
+		<form id="lock-form" class="lock-card" autocomplete="off">
+			<label for="lock-password" class="lock-label">Password</label>
+			<input id="lock-password" class="field" type="password" autocomplete="current-password" autofocus required>
+			<button id="lock-submit" class="button button-primary" type="submit">Unlock</button>
+			<p id="lock-status" class="status" role="status" aria-live="polite"></p>
+		</form>
+	</main>
+
+	<main id="portal" class="portal" hidden>
+
+		<aside id="sidebar" class="sidebar" aria-label="Conversations" hidden>
+			<header class="sidebar-head">
+				<h1 class="sidebar-title">Conversations</h1>
+				<button id="new-conv" class="button button-quiet" type="button">New</button>
+			</header>
+			<ul id="conv-list" class="conv-list"></ul>
+			<footer class="sidebar-foot">
+				<button id="open-admin-key" class="button button-quiet" type="button">My password</button>
+				<button id="lock-now-side" class="button button-quiet" type="button">Lock</button>
+			</footer>
+		</aside>
+
+		<section id="pane" class="pane">
+			<header class="bar">
+				<button id="back" class="button button-quiet back" type="button" hidden>Back</button>
+				<div class="bar-text">
+					<h2 id="pane-title" class="pane-title"></h2>
+					<span id="sync" class="sync" role="status" aria-live="polite"></span>
+				</div>
+				<span class="bar-actions">
+					<button id="toggle-archived" class="button button-quiet" type="button" hidden>Archived</button>
+					<button id="conv-settings" class="button button-quiet" type="button" hidden>Settings</button>
+					<button id="lock-now" class="button button-quiet" type="button">Lock</button>
+				</span>
+			</header>
+
+			<p id="archived-banner" class="banner" hidden>Archived messages. Only you can see these. <button id="leave-archived" class="link-button" type="button">Back to the conversation</button></p>
+
+			<section id="thread" class="thread" aria-label="Messages" tabindex="0"></section>
+
+			<form id="compose" class="compose">
+				<label for="compose-body" class="visually-hidden">Message</label>
+				<textarea id="compose-body" class="field compose-body" rows="3" maxlength="10000" placeholder="Write a message" required></textarea>
+				<div class="compose-row">
+					<span id="compose-status" class="status" role="status" aria-live="polite"></span>
+					<button id="compose-send" class="button button-primary" type="submit">Send</button>
+				</div>
+			</form>
+		</section>
+	</main>
+
+	<dialog id="conv-dialog" class="dialog">
+		<form id="conv-form" autocomplete="off">
+			<h2 id="conv-dialog-title" class="dialog-title">New conversation</h2>
+			<label class="dialog-label" for="conv-label">Name (only you see this)</label>
+			<input id="conv-label" class="field" type="text" maxlength="100">
+			<label class="dialog-label" for="conv-password">Their password</label>
+			<input id="conv-password" class="field" type="password" autocomplete="new-password">
+			<label class="dialog-label" for="conv-password-again">Their password again</label>
+			<input id="conv-password-again" class="field" type="password" autocomplete="new-password">
+			<p id="conv-hint" class="hint">Leave the password empty to keep the current one.</p>
+			<p id="conv-status" class="status" role="status" aria-live="polite"></p>
+			<div class="dialog-row">
+				<button id="conv-delete" class="button button-danger" type="button">Delete conversation</button>
+				<span class="dialog-row-end">
+					<button id="conv-cancel" class="button button-quiet" type="button">Close</button>
+					<button id="conv-save" class="button button-primary" type="submit">Save</button>
+				</span>
+			</div>
+		</form>
+	</dialog>
+
+	<dialog id="admin-key-dialog" class="dialog">
+		<form id="admin-key-form" autocomplete="off">
+			<h2 class="dialog-title">Change my password</h2>
+			<label class="dialog-label" for="admin-key-new">New password</label>
+			<input id="admin-key-new" class="field" type="password" autocomplete="new-password" required>
+			<label class="dialog-label" for="admin-key-again">New password again</label>
+			<input id="admin-key-again" class="field" type="password" autocomplete="new-password" required>
+			<p id="admin-key-status" class="status" role="status" aria-live="polite"></p>
+			<div class="dialog-row">
+				<span></span>
+				<span class="dialog-row-end">
+					<button id="admin-key-cancel" class="button button-quiet" type="button">Close</button>
+					<button id="admin-key-save" class="button button-primary" type="submit">Save password</button>
+				</span>
+			</div>
+		</form>
+	</dialog>
+
+	<script src="config.js?v=20261009221112"></script>
+	<script src="app.js?v=20261009221112"></script>
+</body>
+</html>
