@@ -474,6 +474,15 @@
 					el[id].close();
 				}
 			});
+			auditSeq += 1;
+			auditOldest = null;
+			el['audit-body'].textContent = '';
+			el['audit-head'].textContent = '';
+			el['audit-verified'].textContent = '';
+			el['audit-verified'].classList.remove('is-error');
+			el['audit-status'].textContent = '';
+			el['audit-status'].classList.remove('is-error');
+			el['audit-more'].hidden = true;
 			el['conv-form'].reset();
 			el['admin-key-form'].reset();
 			el['compose'].reset();
