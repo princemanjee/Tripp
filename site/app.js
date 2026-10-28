@@ -27,6 +27,8 @@
 	// Set at sign-in for guests; the watermark is designed later.
 	var watermark = null;
 	var pickingFile = false;
+	var pickTimer = null;
+	var PICK_MAX_MS = 60 * 1000;
 
 	var el = {};
 	['lock', 'lock-form', 'lock-password', 'lock-submit', 'portal', 'sidebar',
@@ -446,35 +448,39 @@
 		var old = token;
 		token = null;
 		role = null;
-		watermark = null;
-		pickingFile = false;
-		document.body.classList.remove('is-blanked', 'is-guest');
-		conversations = [];
-		current = null;
-		viewArchived = false;
-		pendingDelete = null;
-		clearInterval(pollTimer);
-		clearTimeout(idleTimer);
-		clearTimeout(pendingTimer);
-		if (old) {
-			rpc('m_close', { p_token: old });
-		}
-		['conv-dialog', 'admin-key-dialog'].forEach(function (id) {
-			if (el[id].open) {
-				el[id].close();
-			}
-		});
-		el['conv-form'].reset();
-		el['admin-key-form'].reset();
-		el['compose'].reset();
-		el['thread'].textContent = '';
-		el['conv-list'].textContent = '';
-		lastSignature = '';
+		// Hide first so a failure in the cleanup below can never leave the portal showing.
 		el['portal'].hidden = true;
 		el['lock'].hidden = false;
-		document.title = 'Sign in';
-		el['lock-password'].value = '';
-		el['lock-password'].focus();
+		try {
+			watermark = null;
+			conversations = [];
+			current = null;
+			viewArchived = false;
+			pendingDelete = null;
+			clearInterval(pollTimer);
+			clearTimeout(idleTimer);
+			clearTimeout(pendingTimer);
+			if (old) {
+				rpc('m_close', { p_token: old });
+			}
+			['conv-dialog', 'admin-key-dialog'].forEach(function (id) {
+				if (el[id].open) {
+					el[id].close();
+				}
+			});
+			el['conv-form'].reset();
+			el['admin-key-form'].reset();
+			el['compose'].reset();
+			el['thread'].textContent = '';
+			el['conv-list'].textContent = '';
+			lastSignature = '';
+			document.title = 'Sign in';
+			el['lock-password'].value = '';
+			el['lock-password'].focus();
+		} finally {
+			clearPicking();
+			document.body.classList.remove('is-blanked', 'is-guest');
+		}
 	}
 
 	el['lock-form'].addEventListener('submit', function (event) {
@@ -797,24 +803,48 @@
 		}
 	});
 
+	// While a file picker is open a hidden page is blanked but not locked
+	// (phones hide the page for the native picker).
 	document.addEventListener('visibilitychange', function () {
-		if (isGuest() && document.hidden) {
+		if (!isGuest() || !document.hidden) {
+			return;
+		}
+		if (pickingFile) {
+			document.body.classList.add('is-blanked');
+		} else {
 			awayLock();
 		}
 	});
 
-	window.addEventListener('focus', function () { pickingFile = false; });
+	window.addEventListener('focus', function () { clearPicking(); });
+
+	// Clears the picker flag, its timer, and any blanking it caused.
+	function clearPicking() {
+		pickingFile = false;
+		clearTimeout(pickTimer);
+		pickTimer = null;
+		document.body.classList.remove('is-blanked');
+	}
 
 	// Opens a file picker without the focus change counting as leaving. Task 12 wires it up.
 	function pickFile(input) {
 		pickingFile = true;
-		var clear = function () {
-			pickingFile = false;
-			input.removeEventListener('change', clear);
-			input.removeEventListener('cancel', clear);
+		clearTimeout(pickTimer);
+		// Fallback so the flag can never stay stuck.
+		pickTimer = setTimeout(function () {
+			var hidden = document.hidden;
+			clearPicking();
+			if (hidden && isGuest()) {
+				awayLock();
+			}
+		}, PICK_MAX_MS);
+		var done = function () {
+			input.removeEventListener('change', done);
+			input.removeEventListener('cancel', done);
+			clearPicking();
 		};
-		input.addEventListener('change', clear);
-		input.addEventListener('cancel', clear);
+		input.addEventListener('change', done);
+		input.addEventListener('cancel', done);
 		input.click();
 	}
 
