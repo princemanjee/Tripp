@@ -1,0 +1,13 @@
+{
+  "name": "tripp",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:sql": "node scripts/sql.mjs test",
+    "test:js": "node --test tests/js/",
+    "db:apply": "node scripts/sql.mjs apply"
+  },
+  "devDependencies": {
+    "pg": "8.13.1"
+  }
+}
