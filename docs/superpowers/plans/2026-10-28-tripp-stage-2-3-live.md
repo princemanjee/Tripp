@@ -84,7 +84,11 @@ Throwaway. Nothing ships. Results are written into this section, as in Stage 0's
 - [ ] **Step 7:** Drop the spike function, table and policies, delete the spike anonymous users, and confirm none remain.
 - [ ] **Step 8: Decision gate.** If Steps 2 to 4 all pass, continue with Task 2 as written. If anonymous sign-in or private-channel authorization fails, **stop and report to the owner**. The fallback (§12a option i) is an Edge Function that signs short-lived HS256 JWTs. It needs the legacy JWT secret stored as a function secret, which is an owner decision.
 
-**Spike results:** _(filled in by Task 1)_
+**Spike results:** (2026-10-28) BLOCKED at Step 2.
+- Step 1 worked as postgres: table `tripp.spike_ok`, `public.spike_bind()`, SECURITY DEFINER `public.spike_ok_for(uuid)` (search_path '', execute granted to authenticated only) and policy `spike_read` on `realtime.messages` for select to authenticated using `realtime.topic() = 'spike:' || auth.uid()::text and public.spike_ok_for(auth.uid())` were all created. `realtime.messages` already had RLS on and no policies.
+- Step 2 failed: `signInAnonymously()` returned HTTP 422 `anonymous_provider_disabled`, "Anonymous sign-ins are disabled" (491 ms). The owner has not yet enabled it, or the setting did not take. Steps 3 to 6b not run.
+- Step 7 done: all spike objects dropped; verified no spike policies, functions or tables, and 0 anonymous users in auth.users.
+- Step 8 decision gate: not passed, awaiting the owner to enable Allow anonymous sign-ins, then re-run the spike.
 
 ---
 
