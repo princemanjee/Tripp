@@ -121,6 +121,13 @@ Two things in this task are guessed rather than known. The spike settles both be
 - [ ] **Step 4:** Deploy it with `npx supabase@2.54.11 functions deploy spike --project-ref ohhkzjsdabdimlrgnagw --no-verify-jwt --use-api`. Then run `curl -s -H "x-forwarded-for: 6.6.6.6" https://ohhkzjsdabdimlrgnagw.supabase.co/functions/v1/spike`. Compare against `curl -s https://api.ipify.org`.
 - [ ] **Step 5:** Delete the spike with `npx supabase@2.54.11 functions delete spike --project-ref ohhkzjsdabdimlrgnagw` and remove the folder.
 - [ ] **Step 6:** Record the answers here and choose `clientIp`'s rule from them: the entry that matches ipify even when the header is spoofed. If (b) fails, stop and report. D2 and Task 8 would have to change.
+
+**Spike results (2026-10-28):**
+- (a) The platform replaces any client-sent `x-forwarded-for`. From `<owner IP>`, a request with a spoofed `6.6.6.6` arrived as `<owner IP>,<owner IP>, <edge IP>`; the spoofed value never appeared. The first comma-separated entry is the real client IP.
+- (b) Yes. `SUPABASE_DB_URL`, `SUPABASE_SERVICE_ROLE_KEY` and `SUPABASE_URL` are all present in the Edge runtime.
+- (c) Yes. `npx supabase@2.54.11 functions deploy --use-api` deployed without needing Docker (the CLI printed only "Uploading asset"; Docker Desktop was running on the machine, so this is not proof of a Docker-free host).
+- `cf-connecting-ip` is also present and equalled `<owner IP>`. A client-sent `cf-connecting-ip` was rejected by Cloudflare (error 1000), so it is trustworthy too. `x-real-ip` is absent. `true-client-ip`, `forwarded`, `via` and `fly-client-ip` are absent.
+- **`clientIp` rule:** split `x-forwarded-for` on commas, trim, take the first entry; fall back to `cf-connecting-ip`, then `'unknown'`.
 - [ ] **Step 7:** Commit: `git add .gitignore package.json package-lock.json scripts/sql.mjs tests/sql/000_harness.sql docs/superpowers/plans && git commit -m "Add SQL test harness; record Edge runtime spike results"`
 
 ### Task 2: Keep-alive (Tripp + HOPE)
