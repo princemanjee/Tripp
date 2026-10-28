@@ -33,7 +33,7 @@ try {
 	$version = [DateTime]::UtcNow.ToString('yyyyMMddHHmmss')
 	$index = Join-Path $work 'index.html'
 	$html = Get-Content $index -Raw
-	foreach ($file in 'styles.css', 'config.js', 'app.js') {
+	foreach ($file in 'styles.css', 'config.js', 'crypto.js', 'app.js') {
 		$html = $html.Replace("`"$file`"", "`"$file`?v=$version`"")
 	}
 	Set-Content -Path $index -Value $html -NoNewline

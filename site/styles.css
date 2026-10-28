@@ -173,7 +173,7 @@ body {
 
 .sidebar-head { border-bottom: 1px solid var(--line); }
 
-.sidebar-foot { border-top: 1px solid var(--line); }
+.sidebar-foot { border-top: 1px solid var(--line); flex-wrap: wrap; justify-content: flex-start; }
 
 .sidebar-title { margin: 0; font-size: 1rem; }
 
@@ -323,6 +323,41 @@ body {
 	justify-content: space-between;
 	gap: 12px;
 }
+
+.compose-actions { display: flex; gap: 8px; margin-left: auto; }
+
+.attach-list {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+	display: grid;
+	gap: 4px;
+	font-size: 0.85rem;
+}
+
+.attach-list li { display: flex; gap: 12px; align-items: baseline; }
+
+.attach-list .attach-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.attachments { display: grid; gap: 6px; margin-top: 6px; }
+
+.attachment {
+	max-width: 100%;
+	padding: 6px 10px;
+	border: 1px solid var(--line);
+	border-radius: var(--radius);
+	background: var(--surface);
+	color: var(--ink);
+	font: inherit;
+	font-size: 0.9rem;
+	text-align: left;
+	overflow-wrap: anywhere;
+	cursor: pointer;
+}
+
+.attachment:disabled { color: var(--muted); cursor: default; }
+
+.attachment:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* Phones: the admin sees the list or a conversation, one at a time. */
 

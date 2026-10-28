@@ -33,6 +33,17 @@
 	var auditKind = 'events';
 	var auditOldest = null;
 	var auditSeq = 0;
+	// File keys live in memory only, and lock() drops every one of them.
+	var MAX_FILE = 26214400;
+	var MAX_FILES = 10;
+	var ownerKey = null;             // admin: the owner's private key, once unlocked
+	var ownerInfo = null;            // admin: the owner row from m_keys (public key, wrapped private key, KDF), null before setup
+	var convKeys = {};               // admin: conversation id -> DEK
+	var guestDek = null;             // guest: this conversation's DEK
+	var keysChecked = false;         // the key state for this session has been loaded
+	var keySetup = false;            // key dialog: setting up (true) or unlocking (false)
+	var pendingFiles = [];           // files chosen for the next message
+	var C = window.TrippCrypto;
 
 	var el = {};
 	['lock', 'lock-form', 'lock-password', 'lock-submit', 'portal', 'sidebar',
@@ -44,7 +55,10 @@
 		'admin-key-form', 'admin-key-new', 'admin-key-again', 'admin-key-status', 'admin-key-cancel',
 		'admin-key-save', 'conv-hold-row', 'conv-hold', 'retention-days', 'retention-status',
 		'retention-save', 'open-audit', 'audit-dialog', 'audit-tab-events', 'audit-tab-visits',
-		'audit-verified', 'audit-head', 'audit-body', 'audit-status', 'audit-more', 'audit-close'].forEach(function (id) {
+		'audit-verified', 'audit-head', 'audit-body', 'audit-status', 'audit-more', 'audit-close',
+		'attach', 'attach-input', 'attach-list', 'files-key', 'key-backup', 'key-dialog', 'key-form',
+		'key-dialog-title', 'key-pass', 'key-setup', 'key-pass-again', 'key-status', 'key-cancel',
+		'key-save'].forEach(function (id) {
 		el[id] = document.getElementById(id);
 	});
 
@@ -60,6 +74,14 @@
 		bad_days: 'Enter a whole number of days, 1 or more, or leave it empty.',
 		mismatch: 'The two password entries do not match. Type them again.',
 		forbidden: 'Only the admin can do that.',
+		bad_passphrase: 'That passphrase did not unlock your files.',
+		needs_unlock: 'Unlock your files first, so their key can be moved to the new password.',
+		too_large: 'Files can be up to 25 MB.',
+		too_many: 'Up to 10 files per message.',
+		empty_file: 'That file is empty.',
+		empty_passphrase: 'Enter a passphrase.',
+		passphrase_mismatch: 'The two passphrase entries do not match. Type them again.',
+		exists: 'Files are already set up. Unlock them instead.',
 		bad_kind: 'Something went wrong. Try again.',
 		bad_request: 'Something went wrong. Try again.',
 		server: 'Something went wrong. Try again.',
@@ -175,6 +197,7 @@
 		if (open && conv) {
 			el['toggle-archived'].textContent = 'Archived (' + conv.archived_count + ')';
 		}
+		updateFiles();
 	}
 
 	// ----- Conversation list (admin) ------------------------------------------
@@ -239,6 +262,8 @@
 		viewArchived = false;
 		pendingDelete = null;
 		lastSignature = '';
+		pendingFiles = [];
+		renderPending();
 		el['thread'].textContent = '';
 		setStatus(el['compose-status'], '');
 		renderConversations();
@@ -288,8 +313,9 @@
 	}
 
 	function renderThread(messages) {
-		var signature = JSON.stringify([current, viewArchived, pendingDelete, messages.map(function (m) {
-			return [m.id, m.hidden];
+		var dek = currentDek();
+		var signature = JSON.stringify([current, viewArchived, pendingDelete, Boolean(dek), messages.map(function (m) {
+			return [m.id, m.hidden, (m.attachments || []).map(function (a) { return a.id; })];
 		})]);
 		if (signature === lastSignature) {
 			return;
@@ -312,14 +338,24 @@
 		messages.forEach(function (message) {
 			var item = document.createElement('article');
 			item.className = 'message' + (message.mine ? ' is-mine' : '') + (message.hidden ? ' is-hidden' : '');
-			var body = document.createElement('p');
-			body.className = 'message-body';
-			body.textContent = message.body;
+			if (message.body) {
+				var body = document.createElement('p');
+				body.className = 'message-body';
+				body.textContent = message.body;
+				item.appendChild(body);
+			}
+			if (message.attachments && message.attachments.length) {
+				var files = document.createElement('div');
+				files.className = 'attachments';
+				message.attachments.forEach(function (att) {
+					files.appendChild(attachmentButton(att, dek));
+				});
+				item.appendChild(files);
+			}
 			var meta = document.createElement('p');
 			meta.className = 'message-meta';
 			meta.textContent = (message.mine ? 'You' : 'Them') + ', ' + formatTime(message.at) +
 				(message.hidden ? '. Hidden from them' : '');
-			item.appendChild(body);
 			item.appendChild(meta);
 			if (role === 'admin') {
 				item.appendChild(messageActions(message));
@@ -343,6 +379,12 @@
 			? { p_token: token, p_conversation: current, p_archived: viewArchived }
 			: { p_token: token };
 		return rpc('m_list', args).then(function (result) {
+			// The admin needs the conversation's key before its files can be named.
+			if (!result.ok || role !== 'admin') {
+				return result;
+			}
+			return loadConvKey(current).then(function () { return result; });
+		}).then(function (result) {
 			if (!token) {
 				return;
 			}
@@ -353,6 +395,7 @@
 					layout();
 				}
 				renderThread(result.messages || []);
+				updateFiles();
 				setSync(true);
 			} else if (result.error === 'expired') {
 				lock();
@@ -405,6 +448,8 @@
 			}
 			if (!result.ok) {
 				setStatus(el['compose-status'], result.error || 'network');
+			} else if (action === 'delete') {
+				sweep();
 			}
 			lastSignature = '';
 			refresh();
@@ -447,6 +492,8 @@
 		if (role === 'guest') {
 			document.body.classList.add('is-guest');
 			el['compose-body'].focus();
+		} else {
+			loadOwnerInfo();
 		}
 	}
 
@@ -454,6 +501,12 @@
 		var old = token;
 		token = null;
 		role = null;
+		ownerKey = null;
+		ownerInfo = null;
+		convKeys = {};
+		guestDek = null;
+		keysChecked = false;
+		pendingFiles = [];
 		// Hide first so a failure in the cleanup below can never leave the portal showing.
 		el['portal'].hidden = true;
 		el['lock'].hidden = false;
@@ -469,7 +522,7 @@
 			if (old) {
 				rpc('m_close', { p_token: old });
 			}
-			['conv-dialog', 'admin-key-dialog', 'audit-dialog'].forEach(function (id) {
+			['conv-dialog', 'admin-key-dialog', 'audit-dialog', 'key-dialog'].forEach(function (id) {
 				if (el[id].open) {
 					el[id].close();
 				}
@@ -485,7 +538,10 @@
 			el['audit-more'].hidden = true;
 			el['conv-form'].reset();
 			el['admin-key-form'].reset();
+			el['key-form'].reset();
 			el['compose'].reset();
+			el['attach-input'].value = '';
+			renderPending();
 			el['thread'].textContent = '';
 			el['conv-list'].textContent = '';
 			lastSignature = '';
@@ -500,6 +556,7 @@
 
 	el['lock-form'].addEventListener('submit', function (event) {
 		event.preventDefault();
+		// A guest's password is kept only through sign-in, to open the conversation's file key.
 		var password = el['lock-password'].value;
 		el['lock-submit'].disabled = true;
 		fn('open', { password: password }).then(function (result) {
@@ -507,9 +564,13 @@
 			el['lock-password'].value = '';
 			if (result.ok && result.token) {
 				unlock(result);
+				if (role === 'guest') {
+					openGuestKey(password, false);
+				}
 			} else {
 				el['lock-password'].focus();
 			}
+			password = null;
 		});
 	});
 
@@ -518,21 +579,45 @@
 	el['compose'].addEventListener('submit', function (event) {
 		event.preventDefault();
 		var body = el['compose-body'].value;
-		if (!body.trim()) {
+		var files = pendingFiles.slice();
+		if (!body.trim() && !files.length) {
 			setStatus(el['compose-status'], 'empty');
 			return;
 		}
-		var args = { p_token: token, p_body: body };
-		if (role === 'admin') {
-			args.p_conversation = current;
+		var t = token;
+		var conversation = role === 'admin' ? current : null;
+		var dek = currentDek();
+		if (files.length && !dek) {
+			updateFiles();
+			return;
 		}
 		el['compose-send'].disabled = true;
+		el['attach'].disabled = true;
 		setNote(el['compose-status'], 'Sending');
-		rpc('m_post', args).then(function (result) {
+		uploadAll(files, dek, conversation, t).then(function (attachments) {
+			var args = { p_token: t, p_body: body };
+			if (role === 'admin') {
+				args.p_conversation = conversation;
+			}
+			if (attachments.length) {
+				args.p_attachments = attachments;
+			}
+			setNote(el['compose-status'], 'Sending');
+			return rpc('m_post', args);
+		}).catch(function (err) {
+			return err && err.error ? err : { ok: false, error: 'server' };
+		}).then(function (result) {
 			el['compose-send'].disabled = false;
+			el['attach'].disabled = false;
+			if (token !== t) {
+				return;
+			}
 			if (result.ok) {
 				el['compose-body'].value = '';
+				pendingFiles = [];
+				renderPending();
 				setStatus(el['compose-status'], '');
+				updateFiles();
 				refresh().then(function () {
 					el['thread'].scrollTop = el['thread'].scrollHeight;
 				});
@@ -640,15 +725,34 @@
 		}
 		el['conv-save'].disabled = true;
 		setNote(el['conv-status'], 'Saving');
-		rpc('m_conv_save', {
-			p_token: token,
-			p_id: editing,
-			p_label: label || null,
-			p_password: password || null
+		var t = token;
+		var id = editing;
+		guestWrap(id, password).then(function (keys) {
+			var args = { p_token: t, p_id: id, p_label: label || null, p_password: password || null };
+			if (keys) {
+				args.p_wrapped_guest = keys.wrapped;
+				args.p_guest_salt = keys.salt;
+				args.p_guest_iv = keys.iv;
+				args.p_guest_iterations = keys.iterations;
+				if (keys.owner) {
+					args.p_wrapped_owner = keys.owner;
+				}
+			}
+			return rpc('m_conv_save', args).then(function (result) {
+				if (result.ok && keys && id === null && token === t && ownerKey) {
+					convKeys[result.id] = keys.dek;
+				}
+				return result;
+			});
+		}).catch(function () {
+			return { ok: false, error: 'server' };
 		}).then(function (result) {
 			el['conv-save'].disabled = false;
+			if (token !== t) {
+				return;
+			}
 			if (result.ok) {
-				var created = editing === null;
+				var created = id === null;
 				el['conv-dialog'].close();
 				el['conv-form'].reset();
 				loadConversations().then(function () {
@@ -698,6 +802,8 @@
 		var id = editing;
 		rpc('m_conv_delete', { p_token: token, p_id: id }).then(function (result) {
 			if (result.ok) {
+				delete convKeys[id];
+				sweep();
 				el['conv-dialog'].close();
 				current = null;
 				viewArchived = false;
@@ -785,6 +891,513 @@
 			} else {
 				setStatus(el['admin-key-status'], result.error || 'network');
 			}
+		});
+	});
+
+	// ----- Encrypted files ------------------------------------------------------
+
+	function currentDek() {
+		if (role === 'guest') {
+			return guestDek;
+		}
+		if (role === 'admin' && current !== null) {
+			return convKeys[current] || null;
+		}
+		return null;
+	}
+
+	function formatBytes(n) {
+		if (n < 1024) {
+			return n + ' bytes';
+		}
+		if (n < 1048576) {
+			return Math.round(n / 1024) + ' KB';
+		}
+		return (n / 1048576).toFixed(1) + ' MB';
+	}
+
+	var ATTACH_NOTES = ['Unlock files to attach', 'Attachments are not set up yet'];
+
+	// Shows Attach only when there is a key to encrypt with, and says why when there is not.
+	function updateFiles() {
+		var admin = role === 'admin';
+		el['files-key'].hidden = !admin || !keysChecked || Boolean(ownerKey);
+		el['files-key'].textContent = ownerInfo ? 'Unlock files' : 'Set up files';
+		el['key-backup'].hidden = !admin || !ownerInfo;
+		var dek = currentDek();
+		el['attach'].hidden = !dek;
+		var note = '';
+		if (!dek && keysChecked) {
+			note = admin && !ownerKey ? ATTACH_NOTES[0] : ATTACH_NOTES[1];
+		}
+		var status = el['compose-status'];
+		if (!status.textContent || ATTACH_NOTES.indexOf(status.textContent) !== -1) {
+			setNote(status, note);
+		}
+		if (!dek && pendingFiles.length) {
+			pendingFiles = [];
+			renderPending();
+		}
+	}
+
+	function sweep() {
+		fn('media', { action: 'sweep' });
+	}
+
+	function saveBlob(blob, name) {
+		var url = URL.createObjectURL(blob);
+		var link = document.createElement('a');
+		link.href = url;
+		link.download = name;
+		link.hidden = true;
+		document.body.appendChild(link);
+		link.click();
+		link.remove();
+		setTimeout(function () { URL.revokeObjectURL(url); }, 60000);
+	}
+
+	// Admin: whether files are set up, and the wrapped owner key if they are.
+	function loadOwnerInfo() {
+		var t = token;
+		return rpc('m_keys', { p_token: t, p_conversation: null }).then(function (result) {
+			if (token !== t) {
+				return;
+			}
+			if (result.ok) {
+				ownerInfo = result.owner || null;
+				keysChecked = true;
+				updateFiles();
+			} else if (result.error === 'expired') {
+				lock();
+			}
+		});
+	}
+
+	// Admin: the conversation's DEK, opened with the owner's private key.
+	function loadConvKey(id) {
+		if (role !== 'admin' || !ownerKey || id === null || convKeys[id]) {
+			return Promise.resolve();
+		}
+		var t = token;
+		var key = ownerKey;
+		return rpc('m_keys', { p_token: t, p_conversation: id }).then(function (result) {
+			if (token !== t || ownerKey !== key) {
+				return;
+			}
+			if (!result.ok) {
+				if (result.error === 'expired') {
+					lock();
+				}
+				return;
+			}
+			if (!result.conv || !result.conv.wrapped_owner) {
+				return;
+			}
+			return C.unwrapForOwner(result.conv.wrapped_owner, key).then(function (dek) {
+				if (token === t && ownerKey === key) {
+					convKeys[id] = dek;
+				}
+			});
+		}).catch(function () {});
+	}
+
+	// Guest: open this conversation's DEK with the sign-in password. On the
+	// first sign-in after files were set up there is none yet, so make it and
+	// store it wrapped for the guest and for the owner.
+	function openGuestKey(password, retried) {
+		var t = token;
+		return rpc('m_keys', { p_token: t, p_conversation: null }).then(function (result) {
+			if (token !== t || !result.ok) {
+				return null;
+			}
+			var conv = result.conv;
+			if (conv && conv.wrapped_guest) {
+				return C.deriveGuestKey(password, conv.guest_salt, conv.guest_iterations).then(function (key) {
+					return C.unwrapForGuest(conv.wrapped_guest, conv.guest_iv, key);
+				});
+			}
+			if (conv || !result.public_jwk) {
+				return null;
+			}
+			var salt = C.randomB64(16);
+			var dek = null;
+			var wrapped = null;
+			return C.newConversationKey().then(function (made) {
+				dek = made;
+				return C.deriveGuestKey(password, salt, C.ITERATIONS);
+			}).then(function (key) {
+				return C.wrapForGuest(dek, key);
+			}).then(function (w) {
+				wrapped = w;
+				return C.wrapForOwner(dek, result.public_jwk);
+			}).then(function (owner) {
+				if (token !== t) {
+					return null;
+				}
+				return rpc('m_key_conv', {
+					p_token: t,
+					p_conversation: null,
+					p_wrapped_owner: owner,
+					p_wrapped_guest: wrapped.wrapped,
+					p_guest_salt: salt,
+					p_guest_iv: wrapped.iv,
+					p_guest_iterations: C.ITERATIONS
+				}).then(function (saved) {
+					if (saved.ok) {
+						return dek;
+					}
+					// Another sign-in made the key first: open that one instead.
+					if (saved.error === 'exists' && !retried) {
+						return openGuestKey(password, true).then(function () { return null; });
+					}
+					return null;
+				});
+			});
+		}).then(function (dek) {
+			if (token === t && dek) {
+				guestDek = dek;
+				lastSignature = '';
+				loadThread();
+			}
+		}).catch(function () {}).then(function () {
+			if (token === t) {
+				keysChecked = true;
+				updateFiles();
+			}
+		});
+	}
+
+	// Admin: when files are unlocked, a new password also gets the
+	// conversation's key wrapped under it (and a new conversation gets a key).
+	function guestWrap(id, password) {
+		if (!password || !ownerKey || !ownerInfo) {
+			return Promise.resolve(null);
+		}
+		var pub = ownerInfo.public_jwk;
+		var start = id === null
+			? C.newConversationKey()
+			: loadConvKey(id).then(function () { return convKeys[id] || null; });
+		return start.then(function (dek) {
+			if (!dek) {
+				return null;
+			}
+			var salt = C.randomB64(16);
+			var keys = { dek: dek, salt: salt, iterations: C.ITERATIONS, wrapped: null, iv: null, owner: null };
+			return C.deriveGuestKey(password, salt, C.ITERATIONS).then(function (key) {
+				return C.wrapForGuest(dek, key);
+			}).then(function (w) {
+				keys.wrapped = w.wrapped;
+				keys.iv = w.iv;
+				if (id !== null) {
+					return keys;
+				}
+				return C.wrapForOwner(dek, pub).then(function (owner) {
+					keys.owner = owner;
+					return keys;
+				});
+			});
+		});
+	}
+
+	// A button per attachment. The name is shown only once it has been decrypted.
+	function attachmentButton(att, dek) {
+		var button = document.createElement('button');
+		button.type = 'button';
+		button.className = 'attachment';
+		var size = formatBytes(att.bytes);
+		if (!dek) {
+			button.textContent = 'Locked file (' + size + ')';
+			button.disabled = true;
+			return button;
+		}
+		button.textContent = size;
+		C.decryptText(dek, att.name_enc).then(function (name) {
+			button.textContent = name + ' (' + size + ')';
+		}, function () {
+			button.textContent = 'Unreadable file (' + size + ')';
+		});
+		button.addEventListener('click', function () { downloadAttachment(att, dek, button); });
+		return button;
+	}
+
+	function downloadAttachment(att, dek, button) {
+		var t = token;
+		button.disabled = true;
+		fn('media', { action: 'download_url', token: t, attachment: att.id }).then(function (result) {
+			if (!result.ok) {
+				throw result;
+			}
+			return fetch(result.signed_url, { cache: 'no-store', referrerPolicy: 'no-referrer' });
+		}).then(function (response) {
+			if (!response.ok) {
+				throw { ok: false, error: 'network' };
+			}
+			return response.arrayBuffer();
+		}).then(function (buffer) {
+			return Promise.all([
+				C.decryptFile(dek, buffer, att.nonce, att.chunk_size),
+				C.decryptText(dek, att.name_enc)
+			]);
+		}).then(function (parts) {
+			if (token !== t) {
+				return;
+			}
+			saveBlob(new Blob([parts[0]], { type: att.mime || 'application/octet-stream' }), parts[1]);
+		}).catch(function (err) {
+			if (token !== t) {
+				return;
+			}
+			if (err && err.error === 'expired') {
+				lock();
+				return;
+			}
+			setStatus(el['compose-status'], (err && err.error) || 'server');
+		}).then(function () {
+			button.disabled = false;
+		});
+	}
+
+	function renderPending() {
+		var list = el['attach-list'];
+		list.textContent = '';
+		list.hidden = !pendingFiles.length;
+		pendingFiles.forEach(function (file, index) {
+			var item = document.createElement('li');
+			var name = document.createElement('span');
+			name.className = 'attach-name';
+			name.textContent = file.name + ' (' + formatBytes(file.size) + ')';
+			var remove = document.createElement('button');
+			remove.type = 'button';
+			remove.className = 'link-button';
+			remove.textContent = 'Remove';
+			remove.addEventListener('click', function () {
+				pendingFiles.splice(index, 1);
+				renderPending();
+			});
+			item.appendChild(name);
+			item.appendChild(remove);
+			list.appendChild(item);
+		});
+	}
+
+	// Encrypts, then uploads, one file. Resolves to its m_post attachment object.
+	function uploadOne(file, dek, conversation, t) {
+		var sealed = null;
+		var path = null;
+		return C.encryptFile(dek, file).then(function (s) {
+			sealed = s;
+			return fn('media', { action: 'upload_url', token: t, conversation: conversation, kind: 'file', bytes: file.size });
+		}).then(function (result) {
+			if (!result.ok) {
+				throw result;
+			}
+			path = result.path;
+			return fetch(result.signed_url, {
+				method: 'PUT',
+				headers: { 'content-type': 'application/octet-stream' },
+				body: sealed.ciphertext,
+				cache: 'no-store',
+				referrerPolicy: 'no-referrer'
+			});
+		}).then(function (response) {
+			if (!response.ok) {
+				throw { ok: false, error: 'network' };
+			}
+			return C.encryptText(dek, file.name);
+		}).then(function (nameEnc) {
+			return {
+				path: path,
+				kind: 'file',
+				mime: file.type && file.type.length <= 255 ? file.type : 'application/octet-stream',
+				bytes: file.size,
+				name_enc: nameEnc,
+				nonce: sealed.nonce,
+				chunk_size: C.CHUNK
+			};
+		});
+	}
+
+	// One file at a time, so a 25 MB file is never held twice over with others.
+	function uploadAll(files, dek, conversation, t) {
+		var out = [];
+		var chain = Promise.resolve();
+		files.forEach(function (file, index) {
+			chain = chain.then(function () {
+				if (token !== t) {
+					throw { ok: false, error: 'server' };
+				}
+				setNote(el['compose-status'], 'Uploading ' + (index + 1) + ' of ' + files.length);
+				return uploadOne(file, dek, conversation, t).then(function (att) { out.push(att); });
+			});
+		});
+		return chain.then(function () { return out; });
+	}
+
+	el['attach'].addEventListener('click', function () { pickFile(el['attach-input']); });
+
+	el['attach-input'].addEventListener('change', function () {
+		var input = el['attach-input'];
+		var files = Array.prototype.slice.call(input.files || []);
+		input.value = '';
+		var problem = '';
+		files.forEach(function (file) {
+			if (file.size > MAX_FILE) {
+				problem = 'too_large';
+			} else if (file.size === 0) {
+				problem = problem || 'empty_file';
+			} else if (pendingFiles.length >= MAX_FILES) {
+				problem = problem || 'too_many';
+			} else {
+				pendingFiles.push(file);
+			}
+		});
+		setStatus(el['compose-status'], problem);
+		renderPending();
+		if (!problem) {
+			updateFiles();
+		}
+	});
+
+	function openKeyDialog() {
+		keySetup = !ownerInfo;
+		el['key-form'].reset();
+		setStatus(el['key-status'], '');
+		el['key-dialog-title'].textContent = keySetup ? 'Set up files' : 'Unlock files';
+		el['key-setup'].hidden = !keySetup;
+		el['key-save'].textContent = keySetup ? 'Set up files' : 'Unlock';
+		if (!el['key-dialog'].open) {
+			el['key-dialog'].showModal();
+		}
+		el['key-pass'].focus();
+	}
+
+	function setupFiles(passphrase, t) {
+		var salt = C.randomB64(16);
+		var kek = null;
+		var keys = null;
+		return C.deriveKek(passphrase, null, salt, C.ITERATIONS).then(function (k) {
+			kek = k;
+			return C.createOwnerKeys(kek);
+		}).then(function (made) {
+			keys = made;
+			return rpc('m_key_setup', {
+				p_token: t,
+				p_public_jwk: keys.publicJwk,
+				p_wrapped_private: keys.wrappedPrivate,
+				p_private_iv: keys.privateIv,
+				p_kdf_salt: salt,
+				p_iterations: C.ITERATIONS
+			});
+		}).then(function (result) {
+			if (!result.ok) {
+				return result.error || 'network';
+			}
+			return C.openOwnerKey(kek, keys.wrappedPrivate, keys.privateIv).then(function (key) {
+				if (token === t) {
+					ownerKey = key;
+					ownerInfo = {
+						public_jwk: keys.publicJwk,
+						wrapped_private: keys.wrappedPrivate,
+						private_iv: keys.privateIv,
+						kdf_salt: salt,
+						kdf_iterations: C.ITERATIONS
+					};
+					convKeys = {};
+				}
+				return null;
+			});
+		}).catch(function () {
+			return 'server';
+		});
+	}
+
+	function unlockFiles(passphrase, t) {
+		var info = ownerInfo;
+		if (!info) {
+			return Promise.resolve('server');
+		}
+		return C.deriveKek(passphrase, null, info.kdf_salt, info.kdf_iterations).then(function (kek) {
+			return C.openOwnerKey(kek, info.wrapped_private, info.private_iv);
+		}).then(function (key) {
+			if (token === t) {
+				ownerKey = key;
+				convKeys = {};
+			}
+			return null;
+		}, function (err) {
+			return err && err.message === 'bad_passphrase' ? 'bad_passphrase' : 'server';
+		});
+	}
+
+	el['files-key'].addEventListener('click', openKeyDialog);
+
+	el['key-cancel'].addEventListener('click', function () {
+		el['key-form'].reset();
+		el['key-dialog'].close();
+	});
+
+	el['key-form'].addEventListener('submit', function (event) {
+		event.preventDefault();
+		var passphrase = el['key-pass'].value;
+		if (!passphrase) {
+			setStatus(el['key-status'], 'empty_passphrase');
+			return;
+		}
+		if (keySetup && passphrase !== el['key-pass-again'].value) {
+			setStatus(el['key-status'], 'passphrase_mismatch');
+			return;
+		}
+		var t = token;
+		el['key-form'].reset();
+		el['key-save'].disabled = true;
+		setNote(el['key-status'], keySetup ? 'Setting up' : 'Unlocking');
+		var work = keySetup ? setupFiles(passphrase, t) : unlockFiles(passphrase, t);
+		passphrase = null;
+		work.then(function (code) {
+			el['key-save'].disabled = false;
+			if (token !== t) {
+				return;
+			}
+			if (code === 'expired') {
+				lock();
+				return;
+			}
+			if (code === 'exists') {
+				loadOwnerInfo().then(function () {
+					openKeyDialog();
+					setStatus(el['key-status'], 'exists');
+				});
+				return;
+			}
+			if (code) {
+				setStatus(el['key-status'], code);
+				return;
+			}
+			setStatus(el['key-status'], '');
+			el['key-dialog'].close();
+			lastSignature = '';
+			updateFiles();
+			loadThread();
+		});
+	});
+
+	el['key-backup'].addEventListener('click', function () {
+		var t = token;
+		rpc('m_keys_backup', { p_token: t }).then(function (result) {
+			if (token !== t) {
+				return;
+			}
+			if (!result.ok) {
+				if (result.error === 'expired') {
+					lock();
+				}
+				return;
+			}
+			var now = new Date();
+			var day = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' +
+				String(now.getDate()).padStart(2, '0');
+			saveBlob(new Blob([JSON.stringify(result, null, 2)], { type: 'application/json' }),
+				'tripp-key-backup-' + day + '.json');
 		});
 	});
 
@@ -995,7 +1608,7 @@
 		document.body.classList.remove('is-blanked');
 	}
 
-	// Opens a file picker without the focus change counting as leaving. Task 12 wires it up.
+	// Opens a file picker without the focus change counting as leaving.
 	function pickFile(input) {
 		pickingFile = true;
 		clearTimeout(pickTimer);

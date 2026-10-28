@@ -5,7 +5,7 @@
 	<meta name="viewport" content="width=device-width, initial-scale=1">
 	<meta name="robots" content="noindex, nofollow, noarchive">
 	<meta name="referrer" content="no-referrer">
-	<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src https://*.supabase.co; base-uri 'none'; form-action 'none'">
+	<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src https://*.supabase.co; img-src blob:; media-src blob:; base-uri 'none'; form-action 'none'">
 	<title>Sign in</title>
 	<link rel="stylesheet" href="styles.css">
 </head>
@@ -29,6 +29,8 @@
 			<footer class="sidebar-foot">
 				<button id="open-admin-key" class="button button-quiet" type="button">Settings</button>
 				<button id="open-audit" class="button button-quiet" type="button">Audit log</button>
+				<button id="files-key" class="button button-quiet" type="button" hidden>Unlock files</button>
+				<button id="key-backup" class="button button-quiet" type="button" hidden>Download key backup</button>
 				<button id="lock-now-side" class="button button-quiet" type="button">Lock</button>
 			</footer>
 		</aside>
@@ -53,10 +55,15 @@
 
 			<form id="compose" class="compose">
 				<label for="compose-body" class="visually-hidden">Message</label>
-				<textarea id="compose-body" class="field compose-body" rows="3" maxlength="10000" placeholder="Write a message" required></textarea>
+				<textarea id="compose-body" class="field compose-body" rows="3" maxlength="10000" placeholder="Write a message"></textarea>
+				<ul id="attach-list" class="attach-list" hidden></ul>
 				<div class="compose-row">
 					<span id="compose-status" class="status" role="status" aria-live="polite"></span>
-					<button id="compose-send" class="button button-primary" type="submit">Send</button>
+					<span class="compose-actions">
+						<input id="attach-input" type="file" multiple hidden>
+						<button id="attach" class="button button-quiet" type="button" hidden>Attach</button>
+						<button id="compose-send" class="button button-primary" type="submit">Send</button>
+					</span>
 				</div>
 			</form>
 		</section>
@@ -114,6 +121,27 @@
 		</form>
 	</dialog>
 
+	<dialog id="key-dialog" class="dialog">
+		<form id="key-form" autocomplete="off">
+			<h2 id="key-dialog-title" class="dialog-title">Unlock files</h2>
+			<label class="dialog-label" for="key-pass">Passphrase</label>
+			<input id="key-pass" class="field" type="password" autocomplete="off">
+			<div id="key-setup" hidden>
+				<label class="dialog-label" for="key-pass-again">Passphrase again</label>
+				<input id="key-pass-again" class="field" type="password" autocomplete="off">
+				<p class="hint">If this passphrase is lost, every file is lost for good. Nobody can recover it.</p>
+			</div>
+			<p id="key-status" class="status" role="status" aria-live="polite"></p>
+			<div class="dialog-row">
+				<span></span>
+				<span class="dialog-row-end">
+					<button id="key-cancel" class="button button-quiet" type="button">Close</button>
+					<button id="key-save" class="button button-primary" type="submit">Unlock</button>
+				</span>
+			</div>
+		</form>
+	</dialog>
+
 	<dialog id="audit-dialog" class="dialog dialog-wide">
 		<h2 class="dialog-title">Audit log</h2>
 		<div class="audit-tabs" role="tablist">
@@ -137,6 +165,7 @@
 	</dialog>
 
 	<script src="config.js"></script>
+	<script src="crypto.js"></script>
 	<script src="app.js"></script>
 </body>
 </html>

@@ -20,4 +20,6 @@ ping_check tripp -X POST 	-H 'apikey: sb_publishable_BKvG3mZolQFylaMMtiS9bw_sI1Z
 
 ping_check hope 	-H 'apikey: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJqenp1bXp6ZGxzZGZ2eW50bHp1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODYxNjM5MzksImV4cCI6MjEwMTczOTkzOX0.K4Ju9X-uqcp1V1ubf6aoxB6X-oRVI97Py-IlrqISc20' 	-H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJqenp1bXp6ZGxzZGZ2eW50bHp1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODYxNjM5MzksImV4cCI6MjEwMTczOTkzOX0.K4Ju9X-uqcp1V1ubf6aoxB6X-oRVI97Py-IlrqISc20' 	'https://rjzzumzzdlsdfvyntlzu.supabase.co/rest/v1/signature_count?select=*'
 
+ping_check sweep -X POST 	-H 'apikey: sb_publishable_BKvG3mZolQFylaMMtiS9bw_sI1ZUFlq' 	-H 'content-type: application/json' 	-d '{"action":"sweep"}' 	https://ohhkzjsdabdimlrgnagw.supabase.co/functions/v1/media
+
 exit $fail
