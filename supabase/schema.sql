@@ -132,6 +132,7 @@ drop function if exists public.m_post(text, text, bigint);
 drop function if exists public.m_setkey(text, text, text);
 drop function if exists tripp.session_role(text);
 drop function if exists public.m_open(text);
+drop function if exists public.m_conv_save(text, bigint, text, text);
 
 -- Internal: the caller's address as the API gateway reports it.
 create or replace function tripp.client_ip() returns text
@@ -418,7 +419,17 @@ $$;
 -- API, admin only: create a conversation (p_id null) or change one. On a
 -- change, a null or empty label or password leaves that field as it is. A new
 -- password ends the other person's open sessions.
-create or replace function public.m_conv_save(p_token text, p_id bigint, p_label text, p_password text)
+-- Key guard: changing the password of a conversation that has a key row needs
+-- the guest copy rewrapped under the new password in the same call
+-- (p_wrapped_guest and the three fields after it), else `needs_unlock`. A new
+-- conversation may be created with its key row: pass all four guest fields and
+-- p_wrapped_owner (`bad_keys` if only some, `no_keys` if there is no owner row).
+create or replace function public.m_conv_save(
+	p_token text, p_id bigint, p_label text, p_password text,
+	p_wrapped_guest text default null, p_guest_salt text default null,
+	p_guest_iv text default null, p_guest_iterations int default null,
+	p_wrapped_owner text default null
+)
 returns json
 language plpgsql volatile security definer set search_path = ''
 as $$
@@ -426,6 +437,10 @@ declare
 	v_scope bigint := tripp.session_scope(p_token);
 	v_label text := btrim(coalesce(p_label, ''));
 	v_id bigint;
+	v_guest_all boolean := coalesce(p_wrapped_guest, '') <> '' and coalesce(p_guest_salt, '') <> ''
+		and coalesce(p_guest_iv, '') <> '' and coalesce(p_guest_iterations, 0) > 0;
+	v_guest_any boolean := coalesce(p_wrapped_guest, '') <> '' or coalesce(p_guest_salt, '') <> ''
+		or coalesce(p_guest_iv, '') <> '' or coalesce(p_guest_iterations, 0) > 0;
 begin
 	if v_scope is null then
 		return json_build_object('ok', false, 'error', 'expired');
@@ -448,9 +463,22 @@ begin
 		if p_password is null or p_password = '' then
 			return json_build_object('ok', false, 'error', 'empty_key');
 		end if;
+		if v_guest_any or coalesce(p_wrapped_owner, '') <> '' then
+			if not v_guest_all or coalesce(p_wrapped_owner, '') = '' then
+				return json_build_object('ok', false, 'error', 'bad_keys');
+			end if;
+			if not exists (select 1 from tripp_keys.owner o where o.id = 1) then
+				return json_build_object('ok', false, 'error', 'no_keys');
+			end if;
+		end if;
 		insert into tripp.conversations (label, hash)
 		values (v_label, extensions.crypt(p_password, extensions.gen_salt('bf', 10)))
 		returning id into v_id;
+		if v_guest_all then
+			insert into tripp_keys.conversations
+				(conversation_id, wrapped_owner, wrapped_guest, guest_salt, guest_iv, guest_iterations)
+			values (v_id, p_wrapped_owner, p_wrapped_guest, p_guest_salt, p_guest_iv, p_guest_iterations);
+		end if;
 		perform tripp.log_event('admin_conv_save', v_scope, tripp.token_visit(p_token), v_id,
 			jsonb_build_object('created', true, 'label_changed', true, 'password_changed', true));
 		return json_build_object('ok', true, 'id', v_id);
@@ -458,6 +486,15 @@ begin
 
 	if not exists (select 1 from tripp.conversations c where c.id = p_id) then
 		return json_build_object('ok', false, 'error', 'no_conversation');
+	end if;
+	if p_password is not null and p_password <> '' then
+		if coalesce(p_wrapped_guest, '') = ''
+		   and exists (select 1 from tripp_keys.conversations k where k.conversation_id = p_id) then
+			return json_build_object('ok', false, 'error', 'needs_unlock');
+		end if;
+		if v_guest_any and not v_guest_all then
+			return json_build_object('ok', false, 'error', 'bad_keys');
+		end if;
 	end if;
 	if v_label <> '' then
 		update tripp.conversations set label = v_label, changed_at = now() where id = p_id;
@@ -467,6 +504,12 @@ begin
 		   set hash = extensions.crypt(p_password, extensions.gen_salt('bf', 10)), changed_at = now()
 		 where id = p_id;
 		delete from tripp.sessions where conversation_id = p_id;
+		if v_guest_all then
+			update tripp_keys.conversations
+			   set wrapped_guest = p_wrapped_guest, guest_salt = p_guest_salt, guest_iv = p_guest_iv,
+			       guest_iterations = p_guest_iterations, changed_at = now()
+			 where conversation_id = p_id;
+		end if;
 	end if;
 	perform tripp.log_event('admin_conv_save', v_scope, tripp.token_visit(p_token), p_id,
 		jsonb_build_object('created', false, 'label_changed', v_label <> '',
@@ -567,7 +610,7 @@ revoke all on function public.m_list(text, bigint, boolean) from public;
 revoke all on function public.m_post(text, text, bigint, jsonb) from public;
 revoke all on function public.m_close(text) from public;
 revoke all on function public.m_convs(text) from public;
-revoke all on function public.m_conv_save(text, bigint, text, text) from public;
+revoke all on function public.m_conv_save(text, bigint, text, text, text, text, text, int, text) from public;
 revoke all on function public.m_conv_delete(text, bigint) from public;
 revoke all on function public.m_msg(text, bigint, text) from public;
 revoke all on function public.m_admin_key(text, text) from public;
@@ -576,7 +619,7 @@ grant execute on function public.m_list(text, bigint, boolean) to anon, authenti
 grant execute on function public.m_post(text, text, bigint, jsonb) to anon, authenticated;
 grant execute on function public.m_close(text) to anon, authenticated;
 grant execute on function public.m_convs(text) to anon, authenticated;
-grant execute on function public.m_conv_save(text, bigint, text, text) to anon, authenticated;
+grant execute on function public.m_conv_save(text, bigint, text, text, text, text, text, int, text) to anon, authenticated;
 grant execute on function public.m_conv_delete(text, bigint) to anon, authenticated;
 grant execute on function public.m_msg(text, bigint, text) to anon, authenticated;
 grant execute on function public.m_admin_key(text, text) to anon, authenticated;
