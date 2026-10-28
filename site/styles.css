@@ -139,7 +139,6 @@ body {
 	gap: 12px;
 }
 
-.lock-label { color: var(--muted); font-size: 0.9rem; }
 
 /* Portal: a single pane for the other person; list plus pane for the admin. */
 
@@ -383,3 +382,14 @@ body {
 }
 
 .dialog-row-end { display: flex; gap: 8px; margin-left: auto; }
+
+/* Guest anti-leak */
+
+body.is-blanked #portal { visibility: hidden; }
+
+body.is-guest #portal { user-select: none; -webkit-user-select: none; }
+body.is-guest #portal textarea { user-select: text; -webkit-user-select: text; }
+
+@media print {
+	body.is-guest #portal { display: none; }
+}

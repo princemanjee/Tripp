@@ -24,11 +24,12 @@
 	var lastSignature = '';
 	var pollTimer = null;
 	var idleTimer = null;
-	// Set at sign-in for guests; Task 7 renders it.
+	// Set at sign-in for guests; the watermark is designed later.
 	var watermark = null;
+	var pickingFile = false;
 
 	var el = {};
-	['lock', 'lock-form', 'lock-password', 'lock-submit', 'lock-status', 'portal', 'sidebar',
+	['lock', 'lock-form', 'lock-password', 'lock-submit', 'portal', 'sidebar',
 		'new-conv', 'conv-list', 'open-admin-key', 'lock-now-side', 'pane', 'back', 'pane-title',
 		'sync', 'toggle-archived', 'conv-settings', 'lock-now', 'archived-banner', 'leave-archived',
 		'thread', 'compose', 'compose-body', 'compose-send', 'compose-status', 'conv-dialog',
@@ -41,9 +42,6 @@
 	});
 
 	var ERRORS = {
-		denied: 'That password was not accepted.',
-		locked: 'Too many wrong tries. Wait 15 minutes, then try again.',
-		expired: 'Locked after a period without activity. Enter your password again.',
 		empty: 'Write something before sending.',
 		too_long: 'That message is too long. The limit is 10,000 characters.',
 		empty_key: 'Enter a password.',
@@ -222,7 +220,7 @@
 				return true;
 			}
 			if (result.error === 'expired') {
-				lock('expired');
+				lock();
 			}
 			return false;
 		});
@@ -349,7 +347,7 @@
 				renderThread(result.messages || []);
 				setSync(true);
 			} else if (result.error === 'expired') {
-				lock('expired');
+				lock();
 			} else if (result.error === 'no_conversation') {
 				current = null;
 				viewArchived = false;
@@ -394,7 +392,7 @@
 		clearTimeout(pendingTimer);
 		rpc('m_msg', { p_token: token, p_id: id, p_action: action }).then(function (result) {
 			if (!result.ok && result.error === 'expired') {
-				lock('expired');
+				lock();
 				return;
 			}
 			if (!result.ok) {
@@ -410,7 +408,7 @@
 	function resetIdle() {
 		clearTimeout(idleTimer);
 		if (token) {
-			idleTimer = setTimeout(function () { lock('expired'); }, IDLE_MS);
+			idleTimer = setTimeout(function () { lock(); }, IDLE_MS);
 		}
 	}
 
@@ -439,15 +437,18 @@
 		}, POLL_MS);
 		resetIdle();
 		if (role === 'guest') {
+			document.body.classList.add('is-guest');
 			el['compose-body'].focus();
 		}
 	}
 
-	function lock(reason) {
+	function lock() {
 		var old = token;
 		token = null;
 		role = null;
 		watermark = null;
+		pickingFile = false;
+		document.body.classList.remove('is-blanked', 'is-guest');
 		conversations = [];
 		current = null;
 		viewArchived = false;
@@ -472,7 +473,6 @@
 		el['portal'].hidden = true;
 		el['lock'].hidden = false;
 		document.title = 'Sign in';
-		setStatus(el['lock-status'], reason || '');
 		el['lock-password'].value = '';
 		el['lock-password'].focus();
 	}
@@ -481,15 +481,12 @@
 		event.preventDefault();
 		var password = el['lock-password'].value;
 		el['lock-submit'].disabled = true;
-		setNote(el['lock-status'], 'Checking');
 		fn('open', { password: password }).then(function (result) {
 			el['lock-submit'].disabled = false;
 			el['lock-password'].value = '';
 			if (result.ok && result.token) {
-				setStatus(el['lock-status'], '');
 				unlock(result);
 			} else {
-				setStatus(el['lock-status'], result.error || 'network');
 				el['lock-password'].focus();
 			}
 		});
@@ -519,8 +516,8 @@
 					el['thread'].scrollTop = el['thread'].scrollHeight;
 				});
 			} else if (result.error === 'expired') {
-				// The draft is dropped with the session; say so on the lock screen.
-				lock('expired');
+				// The draft is dropped with the session.
+				lock();
 			} else {
 				setStatus(el['compose-status'], result.error || 'network');
 			}
@@ -536,8 +533,8 @@
 
 	// ----- Header and list controls -------------------------------------------
 
-	el['lock-now'].addEventListener('click', function () { lock(''); });
-	el['lock-now-side'].addEventListener('click', function () { lock(''); });
+	el['lock-now'].addEventListener('click', function () { lock(); });
+	el['lock-now-side'].addEventListener('click', function () { lock(); });
 
 	el['back'].addEventListener('click', function () {
 		current = null;
@@ -641,7 +638,7 @@
 					}
 				});
 			} else if (result.error === 'expired') {
-				lock('expired');
+				lock();
 			} else {
 				setStatus(el['conv-status'], result.error || 'network');
 			}
@@ -661,7 +658,7 @@
 			} else {
 				box.checked = !want;
 				if (result.error === 'expired') {
-					lock('expired');
+					lock();
 				} else {
 					setStatus(el['conv-status'], result.error || 'network');
 				}
@@ -686,7 +683,7 @@
 				lastSignature = '';
 				loadConversations().then(function () { renderThread([]); });
 			} else if (result.error === 'expired') {
-				lock('expired');
+				lock();
 			} else {
 				setStatus(el['conv-status'], result.error || 'network');
 			}
@@ -710,7 +707,7 @@
 				el['retention-save'].disabled = false;
 			} else if (result.error === 'expired') {
 				el['admin-key-dialog'].close();
-				lock('expired');
+				lock();
 			} else {
 				setStatus(el['retention-status'], result.error || 'network');
 			}
@@ -736,7 +733,7 @@
 					? 'Nothing will be deleted.'
 					: 'Saved. Older messages and logs are deleted daily after ' + result.retention_days + ' days.');
 			} else if (result.error === 'expired') {
-				lock('expired');
+				lock();
 			} else {
 				setStatus(el['retention-status'], result.error || 'network');
 			}
@@ -763,7 +760,7 @@
 				el['admin-key-form'].reset();
 				setNote(el['admin-key-status'], 'Your password is changed. Use the new one next time.');
 			} else if (result.error === 'expired') {
-				lock('expired');
+				lock();
 			} else {
 				setStatus(el['admin-key-status'], result.error || 'network');
 			}
@@ -780,5 +777,56 @@
 		if (!document.hidden && token) {
 			refresh();
 		}
+	});
+
+	// ----- Guest anti-leak -----------------------------------------------------
+
+	function isGuest() {
+		return Boolean(token) && role === 'guest';
+	}
+
+	// Blanks the portal at once, then locks the session.
+	function awayLock() {
+		document.body.classList.add('is-blanked');
+		lock();
+	}
+
+	window.addEventListener('blur', function () {
+		if (isGuest() && !pickingFile) {
+			awayLock();
+		}
+	});
+
+	document.addEventListener('visibilitychange', function () {
+		if (isGuest() && document.hidden) {
+			awayLock();
+		}
+	});
+
+	window.addEventListener('focus', function () { pickingFile = false; });
+
+	// Opens a file picker without the focus change counting as leaving. Task 12 wires it up.
+	function pickFile(input) {
+		pickingFile = true;
+		var clear = function () {
+			pickingFile = false;
+			input.removeEventListener('change', clear);
+			input.removeEventListener('cancel', clear);
+		};
+		input.addEventListener('change', clear);
+		input.addEventListener('cancel', clear);
+		input.click();
+	}
+
+	function outsideCompose(event) {
+		return event.target !== el['compose-body'];
+	}
+
+	['contextmenu', 'copy', 'cut'].forEach(function (name) {
+		document.addEventListener(name, function (event) {
+			if (isGuest() && outsideCompose(event)) {
+				event.preventDefault();
+			}
+		});
 	});
 }());
