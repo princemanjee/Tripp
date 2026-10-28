@@ -29,11 +29,24 @@ function connect() {
   });
 }
 
-async function runSchema(client) {
+const TXN_CONTROL = /(^|;)\s*(commit|rollback|abort|start\s+transaction|prepare\s+transaction)\b/im;
+
+class TxnEnded extends Error {}
+
+async function xid(client) {
+  return (await client.query('select pg_current_xact_id()::text as x')).rows[0].x;
+}
+
+async function runChecked(client, name, sql, id) {
+  await client.query(sql);
+  if ((await xid(client)) !== id) throw new TxnEnded('transaction ended inside file');
+}
+
+async function runSchema(client, id) {
   for (const f of SCHEMA_FILES) {
     const p = resolve(root, f);
     if (!existsSync(p)) continue;
-    await client.query(readFileSync(p, 'utf8'));
+    await runChecked(client, f, readFileSync(p, 'utf8'), id);
   }
 }
 
@@ -42,25 +55,45 @@ async function test(pattern = '') {
   const files = existsSync(dir)
     ? readdirSync(dir).filter((f) => f.endsWith('.sql') && f.includes(pattern)).sort()
     : [];
+  if (files.length === 0) {
+    console.log(`FAIL no tests matched ${pattern}`);
+    process.exit(1);
+  }
   const client = connect();
   await client.connect();
   let failed = 0;
   try {
     for (const f of files) {
+      const sql = readFileSync(resolve(dir, f), 'utf8');
+      if (TXN_CONTROL.test(sql)) {
+        failed++;
+        console.log(`FAIL ${f}: transaction-control statement in test file (not sent)`);
+        continue;
+      }
+      let stop = false;
       try {
         await client.query('begin');
-        await runSchema(client);
-        await client.query(readFileSync(resolve(dir, f), 'utf8'));
+        const id = await xid(client);
+        await runSchema(client, id);
+        await runChecked(client, f, sql, id);
         console.log(`PASS ${f}`);
       } catch (e) {
         failed++;
         console.log(`FAIL ${f}: ${e.message}`);
+        if (e instanceof TxnEnded) stop = true;
       } finally {
-        await client.query('rollback');
+        try {
+          await client.query('rollback');
+        } catch (e) {
+          console.log(`FAIL ${f}: rollback failed: ${e.message}`);
+          stop = true;
+          failed++;
+        }
       }
+      if (stop) break;
     }
   } finally {
-    await client.end();
+    await client.end().catch(() => {});
   }
   process.exit(failed ? 1 : 0);
 }
@@ -70,7 +103,7 @@ async function apply() {
   await client.connect();
   try {
     await client.query('begin');
-    await runSchema(client);
+    await runSchema(client, await xid(client));
     await client.query('commit');
     console.log('APPLIED');
   } catch (e) {
