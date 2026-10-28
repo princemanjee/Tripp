@@ -46,6 +46,26 @@ create table if not exists tripp.messages (
 	body text not null check (char_length(body) between 1 and 10000),
 	created_at timestamptz not null default now()
 );
+-- An attachment may carry a message with no text, so the body may be empty.
+-- The old check has a generated name; drop it, whatever it is, and add a named one.
+do $$
+declare
+	v_name text;
+begin
+	for v_name in
+		select c.conname from pg_constraint c
+		 where c.conrelid = 'tripp.messages'::regclass and c.contype = 'c'
+		   and c.conname <> 'messages_body_length'
+		   and pg_get_constraintdef(c.oid) like '%char_length(body)%'
+	loop
+		execute format('alter table tripp.messages drop constraint %I', v_name);
+	end loop;
+	if not exists (select 1 from pg_constraint c
+	                where c.conrelid = 'tripp.messages'::regclass and c.conname = 'messages_body_length') then
+		alter table tripp.messages add constraint messages_body_length
+			check (char_length(body) between 0 and 10000);
+	end if;
+end $$;
 -- author 'owner' is the admin; 'guest' is the conversation's other person.
 -- hidden: the other person cannot see it; the admin still can.
 -- archived: out of the conversation for both; the admin sees it under Archived.
@@ -108,6 +128,7 @@ alter table tripp.attempts enable row level security;
 -- Version 1 functions whose signatures changed.
 drop function if exists public.m_list(text);
 drop function if exists public.m_post(text, text);
+drop function if exists public.m_post(text, text, bigint);
 drop function if exists public.m_setkey(text, text, text);
 drop function if exists tripp.session_role(text);
 drop function if exists public.m_open(text);
@@ -196,7 +217,12 @@ begin
 				'id', m.id,
 				'mine', m.author = 'guest',
 				'body', m.body,
-				'at', m.created_at) order by m.id), '[]'::json)
+				'at', m.created_at,
+				'attachments', (select coalesce(json_agg(json_build_object(
+					'id', a.id, 'kind', a.kind, 'mime', a.mime, 'bytes', a.bytes,
+					'name_enc', a.name_enc, 'nonce', a.nonce, 'chunk_size', a.chunk_size,
+					'duration_ms', a.duration_ms) order by a.id), '[]'::json)
+				                  from tripp.attachments a where a.message_id = m.id)) order by m.id), '[]'::json)
 			  from tripp.messages m
 			 where m.conversation_id = v_scope
 			   and not m.hidden
@@ -217,16 +243,24 @@ begin
 				'body', m.body,
 				'at', m.created_at,
 				'hidden', m.hidden,
-				'archived', m.archived) order by m.id), '[]'::json)
+				'archived', m.archived,
+				'attachments', (select coalesce(json_agg(json_build_object(
+					'id', a.id, 'kind', a.kind, 'mime', a.mime, 'bytes', a.bytes,
+					'name_enc', a.name_enc, 'nonce', a.nonce, 'chunk_size', a.chunk_size,
+					'duration_ms', a.duration_ms) order by a.id), '[]'::json)
+				                  from tripp.attachments a where a.message_id = m.id)) order by m.id), '[]'::json)
 			  from tripp.messages m
 			 where m.conversation_id = p_conversation
 			   and m.archived = coalesce(p_archived, false)));
 end;
 $$;
 
--- API: leave a message. The admin names the conversation; anyone else posts
--- to their own.
-create or replace function public.m_post(p_token text, p_body text, p_conversation bigint default null)
+-- API: leave a message, with up to 10 encrypted attachments. The admin names
+-- the conversation; anyone else posts to their own. Each attachment must be a
+-- reservation made for this conversation (tripp.uploads), not yet attached,
+-- whose uploaded object is exactly the size the ciphertext should be. The
+-- body may be empty only if an attachment is present.
+create or replace function public.m_post(p_token text, p_body text, p_conversation bigint default null, p_attachments jsonb default '[]')
 returns json
 language plpgsql volatile security definer set search_path = ''
 as $$
@@ -235,6 +269,15 @@ declare
 	v_body text := btrim(coalesce(p_body, ''), E' \t\r\n');
 	v_target bigint;
 	v_msg bigint;
+	v_atts jsonb := coalesce(p_attachments, '[]'::jsonb);
+	v_n int;
+	v_att jsonb;
+	v_path text;
+	v_bytes bigint;
+	v_up bigint;
+	v_size bigint;
+	v_id bigint;
+	v_visit bigint := tripp.token_visit(p_token);
 begin
 	if v_scope is null then
 		return json_build_object('ok', false, 'error', 'expired');
@@ -243,18 +286,82 @@ begin
 	if not exists (select 1 from tripp.conversations c where c.id = v_target) then
 		return json_build_object('ok', false, 'error', 'no_conversation');
 	end if;
-	if char_length(v_body) = 0 then
+	if jsonb_typeof(v_atts) is distinct from 'array' then
+		return json_build_object('ok', false, 'error', 'bad_attachment');
+	end if;
+	v_n := jsonb_array_length(v_atts);
+	if v_n > 10 then
+		return json_build_object('ok', false, 'error', 'bad_attachment');
+	end if;
+	if char_length(v_body) = 0 and v_n = 0 then
 		return json_build_object('ok', false, 'error', 'empty');
 	end if;
 	if char_length(v_body) > 10000 then
 		return json_build_object('ok', false, 'error', 'too_long');
 	end if;
+
+	-- Check every attachment before anything is written.
+	for v_att in select value from jsonb_array_elements(v_atts) loop
+		if jsonb_typeof(v_att) is distinct from 'object'
+		   or jsonb_typeof(v_att -> 'path') is distinct from 'string'
+		   or jsonb_typeof(v_att -> 'kind') is distinct from 'string'
+		   or jsonb_typeof(v_att -> 'mime') is distinct from 'string'
+		   or jsonb_typeof(v_att -> 'bytes') is distinct from 'number'
+		   or jsonb_typeof(v_att -> 'name_enc') is distinct from 'string'
+		   or jsonb_typeof(v_att -> 'nonce') is distinct from 'string'
+		   or jsonb_typeof(v_att -> 'chunk_size') is distinct from 'number'
+		   or jsonb_typeof(v_att -> 'duration_ms') not in ('number', 'null') then
+			return json_build_object('ok', false, 'error', 'bad_attachment');
+		end if;
+		if (v_att ->> 'kind') not in ('file', 'audio', 'video')
+		   or char_length(v_att ->> 'mime') > 255
+		   or char_length(v_att ->> 'name_enc') > 2048
+		   or (v_att ->> 'bytes') !~ '^[0-9]{1,9}$'
+		   or (v_att ->> 'chunk_size') !~ '^[0-9]{1,9}$'
+		   or ((v_att ->> 'duration_ms') is not null and (v_att ->> 'duration_ms') !~ '^[0-9]{1,9}$') then
+			return json_build_object('ok', false, 'error', 'bad_attachment');
+		end if;
+		v_path := v_att ->> 'path';
+		v_bytes := (v_att ->> 'bytes')::bigint;
+		if v_bytes not between 1 and 26214400
+		   or (select count(*) from jsonb_array_elements(v_atts) x where x ->> 'path' = v_path) > 1
+		   or exists (select 1 from tripp.attachments a where a.path = v_path) then
+			return json_build_object('ok', false, 'error', 'bad_attachment');
+		end if;
+		select u.conversation_id into v_up from tripp.uploads u where u.path = v_path;
+		if not found or v_up <> v_target then
+			return json_build_object('ok', false, 'error', 'foreign_path');
+		end if;
+		select (o.metadata ->> 'size')::bigint into v_size
+		  from storage.objects o where o.bucket_id = 'tripp-media' and o.name = v_path;
+		if not found then
+			return json_build_object('ok', false, 'error', 'missing_upload');
+		end if;
+		if v_size is distinct from tripp.cipher_size(v_bytes) then
+			return json_build_object('ok', false, 'error', 'size_mismatch');
+		end if;
+	end loop;
+
 	insert into tripp.messages (conversation_id, author, body)
 	values (v_target, case when v_scope > 0 then 'guest' else 'owner' end, v_body)
 	returning id into v_msg;
-	perform tripp.log_event('message', v_scope, tripp.token_visit(p_token), v_msg,
+	perform tripp.log_event('message', v_scope, v_visit, v_msg,
 		jsonb_build_object('author', case when v_scope > 0 then 'guest' else 'owner' end,
-		                   'length', char_length(v_body)));
+		                   'length', char_length(v_body),
+		                   'attachments', v_n));
+
+	for v_att in select value from jsonb_array_elements(v_atts) loop
+		insert into tripp.attachments (message_id, conversation_id, path, kind, mime, bytes,
+		                               name_enc, nonce, chunk_size, duration_ms)
+		values (v_msg, v_target, v_att ->> 'path', v_att ->> 'kind', v_att ->> 'mime',
+		        (v_att ->> 'bytes')::bigint, v_att ->> 'name_enc', v_att ->> 'nonce',
+		        (v_att ->> 'chunk_size')::int, (v_att ->> 'duration_ms')::int)
+		returning id into v_id;
+		perform tripp.log_event('upload', v_scope, v_visit, v_id,
+			jsonb_build_object('kind', v_att ->> 'kind', 'mime', v_att ->> 'mime',
+			                   'bytes', (v_att ->> 'bytes')::bigint));
+		delete from tripp.uploads where path = v_att ->> 'path';
+	end loop;
 	return json_build_object('ok', true);
 end;
 $$;
@@ -457,7 +564,7 @@ $$;
 -- Postgres grants EXECUTE to PUBLIC on every new function. Take that away and
 -- grant only what the browser needs.
 revoke all on function public.m_list(text, bigint, boolean) from public;
-revoke all on function public.m_post(text, text, bigint) from public;
+revoke all on function public.m_post(text, text, bigint, jsonb) from public;
 revoke all on function public.m_close(text) from public;
 revoke all on function public.m_convs(text) from public;
 revoke all on function public.m_conv_save(text, bigint, text, text) from public;
@@ -466,7 +573,7 @@ revoke all on function public.m_msg(text, bigint, text) from public;
 revoke all on function public.m_admin_key(text, text) from public;
 
 grant execute on function public.m_list(text, bigint, boolean) to anon, authenticated;
-grant execute on function public.m_post(text, text, bigint) to anon, authenticated;
+grant execute on function public.m_post(text, text, bigint, jsonb) to anon, authenticated;
 grant execute on function public.m_close(text) to anon, authenticated;
 grant execute on function public.m_convs(text) to anon, authenticated;
 grant execute on function public.m_conv_save(text, bigint, text, text) to anon, authenticated;
