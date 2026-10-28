@@ -87,7 +87,9 @@ begin
 	if v_scope is null then
 		return json_build_object('ok', false, 'error', 'expired');
 	end if;
-	delete from tripp.uploads where created_at < now() - interval '1 day';
+	-- An expired reservation may still have an object that was uploaded but never posted; queue it.
+	with d as (delete from tripp.uploads where created_at < now() - interval '1 day' returning path)
+	insert into tripp.storage_trash (path) select path from d on conflict do nothing;
 	if p_kind is null or p_kind not in ('file', 'audio', 'video') then
 		return json_build_object('ok', false, 'error', 'bad_kind');
 	end if;

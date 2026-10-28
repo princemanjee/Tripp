@@ -64,6 +64,7 @@ begin
 	values ('conversation/' || convA || '/stale', convA, 'file', 1, now() - interval '2 days');
 	r := tripp.media_reserve(gA, null, 'file', 1000);
 	assert not exists (select 1 from tripp.uploads where path = 'conversation/' || convA || '/stale'), 'stale reservation removed';
+	assert exists (select 1 from tripp.storage_trash where path = 'conversation/' || convA || '/stale'), 'stale reservation path queued for removal';
 	pth2 := r ->> 'path';
 
 	att := jsonb_build_array(jsonb_build_object('path', pth, 'kind', 'file', 'mime', 'text/plain',
