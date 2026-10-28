@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "test:sql": "node scripts/sql.mjs test",
-    "test:js": "node --test tests/js/",
+    "test:js": "node --test \"tests/js/*.test.mjs\"",
     "db:apply": "node scripts/sql.mjs apply"
   },
   "devDependencies": {
