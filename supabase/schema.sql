@@ -96,6 +96,7 @@ create table if not exists tripp.sessions (
 	created_at timestamptz not null default now(),
 	last_seen timestamptz not null default now()
 );
+alter table tripp.sessions add column if not exists visit_id bigint;
 
 -- Defence in depth: no policies, so nothing but the table owner reads these.
 alter table tripp.admin_key enable row level security;
@@ -109,6 +110,7 @@ drop function if exists public.m_list(text);
 drop function if exists public.m_post(text, text);
 drop function if exists public.m_setkey(text, text, text);
 drop function if exists tripp.session_role(text);
+drop function if exists public.m_open(text);
 
 -- Internal: the caller's address as the API gateway reports it.
 create or replace function tripp.client_ip() returns text
@@ -173,54 +175,6 @@ revoke all on function tripp.token_hash(text) from public, anon, authenticated;
 revoke all on function tripp.session_scope(text) from public, anon, authenticated;
 revoke all on function tripp.password_taken(text, boolean, bigint) from public, anon, authenticated;
 
--- API: exchange a password for a session token.
--- Eight wrong tries from one address inside 15 minutes locks that address out
--- until the oldest of them is 15 minutes old. A failure returns a result
--- rather than raising, so the attempt row is kept.
-create or replace function public.m_open(p_password text) returns json
-language plpgsql volatile security definer set search_path = ''
-as $$
-declare
-	v_ip text := tripp.client_ip();
-	v_admin boolean := false;
-	v_conversation bigint;
-	v_token text;
-begin
-	delete from tripp.attempts where at < now() - interval '1 day';
-	delete from tripp.sessions
-	 where last_seen < now() - interval '30 minutes'
-	    or created_at < now() - interval '12 hours';
-
-	if (select count(*) from tripp.attempts
-	     where ip = v_ip and at > now() - interval '15 minutes') >= 8 then
-		return json_build_object('ok', false, 'error', 'locked');
-	end if;
-
-	if p_password is not null and p_password <> '' then
-		v_admin := exists (select 1 from tripp.admin_key a where a.hash = extensions.crypt(p_password, a.hash));
-		if not v_admin then
-			select c.id into v_conversation
-			  from tripp.conversations c
-			 where c.hash = extensions.crypt(p_password, c.hash)
-			 limit 1;
-		end if;
-	end if;
-
-	if not v_admin and v_conversation is null then
-		insert into tripp.attempts (ip) values (v_ip);
-		return json_build_object('ok', false, 'error', 'denied');
-	end if;
-
-	v_token := encode(extensions.gen_random_bytes(32), 'hex');
-	insert into tripp.sessions (token_hash, conversation_id)
-	values (tripp.token_hash(v_token), v_conversation);
-	delete from tripp.attempts where ip = v_ip;
-
-	return json_build_object('ok', true, 'token', v_token,
-		'role', case when v_admin then 'admin' else 'guest' end);
-end;
-$$;
-
 -- API: read a conversation, oldest first. `mine` is relative to the caller.
 -- The other person gets their own conversation, without hidden or archived
 -- messages. The admin names the conversation and picks the active or the
@@ -280,6 +234,7 @@ declare
 	v_scope bigint := tripp.session_scope(p_token);
 	v_body text := btrim(coalesce(p_body, ''), E' \t\r\n');
 	v_target bigint;
+	v_msg bigint;
 begin
 	if v_scope is null then
 		return json_build_object('ok', false, 'error', 'expired');
@@ -295,7 +250,11 @@ begin
 		return json_build_object('ok', false, 'error', 'too_long');
 	end if;
 	insert into tripp.messages (conversation_id, author, body)
-	values (v_target, case when v_scope > 0 then 'guest' else 'owner' end, v_body);
+	values (v_target, case when v_scope > 0 then 'guest' else 'owner' end, v_body)
+	returning id into v_msg;
+	perform tripp.log_event('message', v_scope, tripp.token_visit(p_token), v_msg,
+		jsonb_build_object('author', case when v_scope > 0 then 'guest' else 'owner' end,
+		                   'length', char_length(v_body)));
 	return json_build_object('ok', true);
 end;
 $$;
@@ -304,8 +263,14 @@ $$;
 create or replace function public.m_close(p_token text) returns json
 language plpgsql volatile security definer set search_path = ''
 as $$
+declare
+	v_scope bigint := tripp.session_scope(p_token);
+	v_visit bigint := tripp.token_visit(p_token);
 begin
 	delete from tripp.sessions where token_hash = tripp.token_hash(p_token);
+	if found then
+		perform tripp.log_event('logout', v_scope, v_visit, null, null);
+	end if;
 	return json_build_object('ok', true);
 end;
 $$;
@@ -379,6 +344,8 @@ begin
 		insert into tripp.conversations (label, hash)
 		values (v_label, extensions.crypt(p_password, extensions.gen_salt('bf', 10)))
 		returning id into v_id;
+		perform tripp.log_event('admin_conv_save', v_scope, tripp.token_visit(p_token), v_id,
+			jsonb_build_object('created', true, 'label_changed', true, 'password_changed', true));
 		return json_build_object('ok', true, 'id', v_id);
 	end if;
 
@@ -394,6 +361,9 @@ begin
 		 where id = p_id;
 		delete from tripp.sessions where conversation_id = p_id;
 	end if;
+	perform tripp.log_event('admin_conv_save', v_scope, tripp.token_visit(p_token), p_id,
+		jsonb_build_object('created', false, 'label_changed', v_label <> '',
+		                   'password_changed', coalesce(p_password, '') <> ''));
 	return json_build_object('ok', true, 'id', p_id);
 end;
 $$;
@@ -404,6 +374,7 @@ language plpgsql volatile security definer set search_path = ''
 as $$
 declare
 	v_scope bigint := tripp.session_scope(p_token);
+	v_count bigint;
 begin
 	if v_scope is null then
 		return json_build_object('ok', false, 'error', 'expired');
@@ -411,10 +382,13 @@ begin
 	if v_scope <> 0 then
 		return json_build_object('ok', false, 'error', 'forbidden');
 	end if;
+	select count(*) into v_count from tripp.messages where conversation_id = p_id;
 	delete from tripp.conversations where id = p_id;
 	if not found then
 		return json_build_object('ok', false, 'error', 'no_conversation');
 	end if;
+	perform tripp.log_event('admin_conv_delete', v_scope, tripp.token_visit(p_token), p_id,
+		jsonb_build_object('messages', v_count));
 	return json_build_object('ok', true);
 end;
 $$;
@@ -444,6 +418,7 @@ begin
 	if not found then
 		return json_build_object('ok', false, 'error', 'no_message');
 	end if;
+	perform tripp.log_event('admin_' || p_action, v_scope, tripp.token_visit(p_token), p_id, null);
 	return json_build_object('ok', true);
 end;
 $$;
@@ -474,13 +449,13 @@ begin
 	delete from tripp.sessions
 	 where conversation_id is null
 	   and token_hash <> tripp.token_hash(p_token);
+	perform tripp.log_event('admin_key_change', v_scope, tripp.token_visit(p_token), null, null);
 	return json_build_object('ok', true);
 end;
 $$;
 
 -- Postgres grants EXECUTE to PUBLIC on every new function. Take that away and
 -- grant only what the browser needs.
-revoke all on function public.m_open(text) from public;
 revoke all on function public.m_list(text, bigint, boolean) from public;
 revoke all on function public.m_post(text, text, bigint) from public;
 revoke all on function public.m_close(text) from public;
@@ -490,7 +465,6 @@ revoke all on function public.m_conv_delete(text, bigint) from public;
 revoke all on function public.m_msg(text, bigint, text) from public;
 revoke all on function public.m_admin_key(text, text) from public;
 
-grant execute on function public.m_open(text) to anon, authenticated;
 grant execute on function public.m_list(text, bigint, boolean) to anon, authenticated;
 grant execute on function public.m_post(text, text, bigint) to anon, authenticated;
 grant execute on function public.m_close(text) to anon, authenticated;

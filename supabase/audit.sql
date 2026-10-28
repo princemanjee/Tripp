@@ -283,6 +283,131 @@ revoke all on function tripp.log_visit(text, bigint, text, text, text, text, jso
 revoke all on function tripp.log_event(text, bigint, bigint, bigint, jsonb) from public, anon, authenticated;
 revoke all on function tripp.verify_chain(text) from public, anon, authenticated;
 
+-- The session's sign-in visit, or null if the token is unknown. Does not touch
+-- last_seen.
+create or replace function tripp.token_visit(p_token text) returns bigint
+language sql stable set search_path = ''
+as $$
+	select s.visit_id from tripp.sessions s where s.token_hash = tripp.token_hash(p_token);
+$$;
+
+-- Internal: exchange a password for a session token. Only the sign-in Edge
+-- Function calls it, because only it knows the caller's address, browser and
+-- location; it is not granted to the browser roles.
+-- Eight wrong tries from one address inside 15 minutes locks that address out
+-- until the oldest of them is 15 minutes old. A failure returns a result
+-- rather than raising, so the attempt row is kept. Every outcome (ok, denied,
+-- locked) writes one visit, and a failure also writes a login_failed event. A
+-- success writes login and then consent_ack. A missing notice version returns
+-- no_consent and writes no visit and no event.
+create or replace function tripp.open_session(
+	p_password text, p_ip text, p_ua text, p_os text, p_browser text,
+	p_geo jsonb, p_notice_version int
+) returns json
+language plpgsql volatile set search_path = ''
+as $$
+declare
+	v_admin boolean := false;
+	v_conversation bigint;
+	v_token text;
+	v_visit bigint;
+begin
+	delete from tripp.attempts where at < now() - interval '1 day';
+	delete from tripp.sessions
+	 where last_seen < now() - interval '30 minutes'
+	    or created_at < now() - interval '12 hours';
+
+	if (select count(*) from tripp.attempts
+	     where ip = p_ip and at > now() - interval '15 minutes') >= 8 then
+		v_visit := tripp.log_visit('locked', null, p_ip, p_ua, p_os, p_browser, p_geo);
+		perform tripp.log_event('login_failed', null, v_visit, null, jsonb_build_object('reason', 'locked'));
+		return json_build_object('ok', false, 'error', 'locked');
+	end if;
+
+	if p_password is not null and p_password <> '' then
+		v_admin := exists (select 1 from tripp.admin_key a where a.hash = extensions.crypt(p_password, a.hash));
+		if not v_admin then
+			select c.id into v_conversation
+			  from tripp.conversations c
+			 where c.hash = extensions.crypt(p_password, c.hash)
+			 limit 1;
+		end if;
+	end if;
+
+	if not v_admin and v_conversation is null then
+		insert into tripp.attempts (ip) values (p_ip);
+		v_visit := tripp.log_visit('denied', null, p_ip, p_ua, p_os, p_browser, p_geo);
+		perform tripp.log_event('login_failed', null, v_visit, null, jsonb_build_object('reason', 'denied'));
+		return json_build_object('ok', false, 'error', 'denied');
+	end if;
+
+	if p_notice_version is null or p_notice_version < 1 then
+		return json_build_object('ok', false, 'error', 'no_consent');
+	end if;
+
+	v_visit := tripp.log_visit('ok', coalesce(v_conversation, 0), p_ip, p_ua, p_os, p_browser, p_geo);
+	v_token := encode(extensions.gen_random_bytes(32), 'hex');
+	insert into tripp.sessions (token_hash, conversation_id, visit_id)
+	values (tripp.token_hash(v_token), v_conversation, v_visit);
+	delete from tripp.attempts where ip = p_ip;
+	perform tripp.log_event('login', coalesce(v_conversation, 0), v_visit, null, '{}'::jsonb);
+	perform tripp.log_event('consent_ack', coalesce(v_conversation, 0), v_visit, null,
+		jsonb_build_object('notice_version', p_notice_version));
+
+	if v_admin then
+		return json_build_object('ok', true, 'token', v_token, 'role', 'admin');
+	end if;
+	return json_build_object('ok', true, 'token', v_token, 'role', 'guest',
+		'watermark', json_build_object('conversation', v_conversation, 'ip', p_ip));
+end;
+$$;
+
+-- API, admin only: read the audit log, newest first, at most 200 rows. p_kind
+-- is 'events' or 'visits'; p_before pages back from an id. The first page also
+-- carries the chain check. Hashes are not returned.
+create or replace function public.m_audit(p_token text, p_kind text, p_before bigint default null, p_limit int default 100)
+returns json
+language plpgsql volatile security definer set search_path = ''
+as $$
+declare
+	v_scope bigint := tripp.session_scope(p_token);
+	v_limit int := least(greatest(coalesce(p_limit, 100), 1), 200);
+	v_rows json;
+begin
+	if v_scope is null then
+		return json_build_object('ok', false, 'error', 'expired');
+	end if;
+	if v_scope <> 0 then
+		return json_build_object('ok', false, 'error', 'forbidden');
+	end if;
+	if p_kind = 'events' then
+		select coalesce(json_agg(row_to_json(x) order by x.id desc), '[]'::json) into v_rows
+		  from (select e.id, e.at, e.scope, e.visit_id, e.type, e.ref_id, e.detail
+		          from tripp.events e
+		         where p_before is null or e.id < p_before
+		         order by e.id desc limit v_limit) x;
+	elsif p_kind = 'visits' then
+		select coalesce(json_agg(row_to_json(x) order by x.id desc), '[]'::json) into v_rows
+		  from (select v.id, v.at, v.outcome, v.scope, v.ip, v.isp, v.org, v.country, v.region,
+		               v.city, v.lat, v.lon, v.geo_source, v.os, v.browser, v.user_agent
+		          from tripp.visits v
+		         where p_before is null or v.id < p_before
+		         order by v.id desc limit v_limit) x;
+	else
+		return json_build_object('ok', false, 'error', 'bad_kind');
+	end if;
+	if p_before is null then
+		return json_build_object('ok', true, 'rows', v_rows, 'verified', tripp.verify_chain(p_kind));
+	end if;
+	return json_build_object('ok', true, 'rows', v_rows);
+end;
+$$;
+
+revoke all on function tripp.token_visit(text) from public, anon, authenticated;
+revoke all on function tripp.open_session(text, text, text, text, text, jsonb, int) from public, anon, authenticated;
+revoke all on function public.m_audit(text, text, bigint, int) from public;
+grant execute on function public.m_audit(text, text, bigint, int) to anon, authenticated;
+
 -- Keep-alive.
 create or replace function public.m_ping()
 returns json
