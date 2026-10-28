@@ -182,8 +182,8 @@ begin
 	v.country := coalesce(g ->> 'country', 'unknown');
 	v.region := coalesce(g ->> 'region', 'unknown');
 	v.city := coalesce(g ->> 'city', 'unknown');
-	v.lat := (g ->> 'lat')::numeric;
-	v.lon := (g ->> 'lon')::numeric;
+	v.lat := case when jsonb_typeof(g -> 'lat') = 'number' then (g ->> 'lat')::numeric end;
+	v.lon := case when jsonb_typeof(g -> 'lon') = 'number' then (g ->> 'lon')::numeric end;
 	v.geo_source := coalesce(g ->> 'source', 'unknown');
 	v.os := p_os;
 	v.browser := p_browser;
@@ -234,7 +234,8 @@ $$;
 
 -- Walks a chain from the first row and recomputes every hash. Returns
 -- {"ok", "rows", "first_bad_id"}; the first row must start from the genesis
--- hash of 64 zeros. p_table is 'visits' or 'events'.
+-- hash of 64 zeros. p_table is 'visits' or 'events'; anything else returns
+-- {"ok": false, "error": "unknown_table"}.
 create or replace function tripp.verify_chain(p_table text)
 returns json
 language plpgsql
@@ -268,7 +269,7 @@ begin
 			prev := re.row_hash;
 		end loop;
 	else
-		raise exception 'verify_chain: unknown table %', p_table;
+		return json_build_object('ok', false, 'error', 'unknown_table');
 	end if;
 	return json_build_object('ok', bad is null, 'rows', n, 'first_bad_id', bad);
 end;

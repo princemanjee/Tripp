@@ -3,6 +3,10 @@ do $$
 declare
 	a bigint; b bigint; ra tripp.events; rb tripp.events; v text; r json;
 begin
+	-- Start from an empty chain (rolled back with the test transaction).
+	perform set_config('tripp.purge', 'on', true);
+	delete from tripp.events;
+	perform set_config('tripp.purge', 'off', true);
 	a := tripp.log_event('login', 0, null, null, '{"k":1}');
 	b := tripp.log_event('message', 0, null, 5, '{}');
 	select * into ra from tripp.events where id = a;
@@ -11,6 +15,8 @@ begin
 	assert rb.prev_hash = ra.row_hash, 'second event chains to first';
 	assert (tripp.verify_chain('events') ->> 'ok') = 'true', 'events chain verifies';
 	assert (tripp.verify_chain('events') ->> 'rows')::int = 2, 'events row count';
+	r := tripp.verify_chain('nope');
+	assert (r ->> 'ok') = 'false' and (r ->> 'error') = 'unknown_table', 'unknown table returns error json';
 
 	begin
 		update tripp.events set detail = '{"x":2}' where id = a;
@@ -43,6 +49,9 @@ do $$
 declare
 	a bigint; b bigint; ra tripp.visits; rb tripp.visits; v text; r json;
 begin
+	perform set_config('tripp.purge', 'on', true);
+	delete from tripp.visits;
+	perform set_config('tripp.purge', 'off', true);
 	a := tripp.log_visit('ok', 0, '1.2.3.4', 'UA', 'Windows', 'Chrome',
 		'{"isp":"I","country":"CA","lat":43.65,"lon":-79.38,"source":"x"}');
 	b := tripp.log_visit('denied', null, '5.6.7.8', 'UA', 'Mac', 'Safari', '{}');
@@ -53,6 +62,10 @@ begin
 	assert rb.city = 'unknown' and rb.lat is null, 'missing geo keys default';
 	assert ra.lat = 43.65, 'lat stored';
 	assert (tripp.verify_chain('visits') ->> 'ok') = 'true', 'visits chain verifies';
+	b := tripp.log_visit('ok', 0, '1.1.1.1', 'UA', 'Windows', 'Chrome', '{"lat":"unknown","lon":""}');
+	select * into rb from tripp.visits where id = b;
+	assert rb.lat is null and rb.lon is null, 'non-numeric lat/lon stored as null';
+	assert (tripp.verify_chain('visits') ->> 'ok') = 'true', 'visits chain verifies with null lat/lon';
 
 	begin
 		update tripp.visits set ip = 'x' where id = a;
