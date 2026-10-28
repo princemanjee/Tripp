@@ -1,0 +1,6 @@
+services:
+  keepalive:
+    build: .
+    restart: unless-stopped
+    environment:
+      - TZ=UTC
