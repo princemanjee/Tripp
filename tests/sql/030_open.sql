@@ -71,13 +71,24 @@ begin
 	r := tripp.open_session('t-admin', l_ip, 'UA', 'Windows', 'Edge', '{}', 1);
 	assert (r ->> 'error') = 'locked', 'right password still locked';
 
-	-- No consent.
+	-- No consent: checked before the password, records an attempt, writes no visit or event.
 	select coalesce(max(id), 0) into vis0 from tripp.visits;
 	select coalesce(max(id), 0) into ev0 from tripp.events;
+	select count(*) into n from tripp.attempts where attempts.ip = v_ip;
 	r := tripp.open_session('t-admin', v_ip, 'UA', 'Windows', 'Edge', '{}', 0);
 	assert (r ->> 'error') = 'no_consent', 'no_consent for 0';
+	assert (select count(*) from tripp.attempts where attempts.ip = v_ip) = n + 1, 'attempt recorded';
 	r := tripp.open_session('t-admin', v_ip, 'UA', 'Windows', 'Edge', '{}', null);
 	assert (r ->> 'error') = 'no_consent', 'no_consent for null';
+	r := tripp.open_session('wrong', v_ip, 'UA', 'Windows', 'Edge', '{}', 0);
+	assert (r ->> 'error') = 'no_consent', 'wrong password with no consent is also no_consent';
 	assert (select count(*) from tripp.visits where id > vis0) = 0, 'no visit on no_consent';
 	assert (select count(*) from tripp.events where id > ev0) = 0, 'no event on no_consent';
+
+	-- Null ip is normalised to unknown and does not raise.
+	delete from tripp.attempts where attempts.ip = 'unknown';
+	r := tripp.open_session('wrong', null, 'UA', 'Windows', 'Edge', '{}', 1);
+	assert (r ->> 'error') = 'denied', 'null ip denied';
+	assert (select ip from tripp.visits order by id desc limit 1) = 'unknown', 'visit ip unknown';
+	assert (select count(*) from tripp.attempts where attempts.ip = 'unknown') = 1, 'attempt under unknown';
 end $$;

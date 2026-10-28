@@ -311,6 +311,7 @@ declare
 	v_conversation bigint;
 	v_token text;
 	v_visit bigint;
+	v_ip text := coalesce(nullif(btrim(p_ip), ''), 'unknown');
 begin
 	delete from tripp.attempts where at < now() - interval '1 day';
 	delete from tripp.sessions
@@ -318,10 +319,15 @@ begin
 	    or created_at < now() - interval '12 hours';
 
 	if (select count(*) from tripp.attempts
-	     where ip = p_ip and at > now() - interval '15 minutes') >= 8 then
-		v_visit := tripp.log_visit('locked', null, p_ip, p_ua, p_os, p_browser, p_geo);
+	     where ip = v_ip and at > now() - interval '15 minutes') >= 8 then
+		v_visit := tripp.log_visit('locked', null, v_ip, p_ua, p_os, p_browser, p_geo);
 		perform tripp.log_event('login_failed', null, v_visit, null, jsonb_build_object('reason', 'locked'));
 		return json_build_object('ok', false, 'error', 'locked');
+	end if;
+
+	if p_notice_version is null or p_notice_version < 1 then
+		insert into tripp.attempts (ip) values (v_ip);
+		return json_build_object('ok', false, 'error', 'no_consent');
 	end if;
 
 	if p_password is not null and p_password <> '' then
@@ -335,21 +341,17 @@ begin
 	end if;
 
 	if not v_admin and v_conversation is null then
-		insert into tripp.attempts (ip) values (p_ip);
-		v_visit := tripp.log_visit('denied', null, p_ip, p_ua, p_os, p_browser, p_geo);
+		insert into tripp.attempts (ip) values (v_ip);
+		v_visit := tripp.log_visit('denied', null, v_ip, p_ua, p_os, p_browser, p_geo);
 		perform tripp.log_event('login_failed', null, v_visit, null, jsonb_build_object('reason', 'denied'));
 		return json_build_object('ok', false, 'error', 'denied');
 	end if;
 
-	if p_notice_version is null or p_notice_version < 1 then
-		return json_build_object('ok', false, 'error', 'no_consent');
-	end if;
-
-	v_visit := tripp.log_visit('ok', coalesce(v_conversation, 0), p_ip, p_ua, p_os, p_browser, p_geo);
+	v_visit := tripp.log_visit('ok', coalesce(v_conversation, 0), v_ip, p_ua, p_os, p_browser, p_geo);
 	v_token := encode(extensions.gen_random_bytes(32), 'hex');
 	insert into tripp.sessions (token_hash, conversation_id, visit_id)
 	values (tripp.token_hash(v_token), v_conversation, v_visit);
-	delete from tripp.attempts where ip = p_ip;
+	delete from tripp.attempts where ip = v_ip;
 	perform tripp.log_event('login', coalesce(v_conversation, 0), v_visit, null, '{}'::jsonb);
 	perform tripp.log_event('consent_ack', coalesce(v_conversation, 0), v_visit, null,
 		jsonb_build_object('notice_version', p_notice_version));
@@ -358,7 +360,7 @@ begin
 		return json_build_object('ok', true, 'token', v_token, 'role', 'admin');
 	end if;
 	return json_build_object('ok', true, 'token', v_token, 'role', 'guest',
-		'watermark', json_build_object('conversation', v_conversation, 'ip', p_ip));
+		'watermark', json_build_object('conversation', v_conversation, 'ip', v_ip));
 end;
 $$;
 
