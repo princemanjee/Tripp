@@ -24,9 +24,11 @@
 	var lastSignature = '';
 	var pollTimer = null;
 	var idleTimer = null;
+	// Set at sign-in for guests; Task 7 renders it.
+	var watermark = null;
 
 	var el = {};
-	['lock', 'lock-form', 'lock-password', 'lock-submit', 'lock-status', 'portal', 'sidebar',
+	['lock', 'lock-form', 'lock-password', 'lock-notice', 'lock-ack', 'lock-submit', 'lock-status', 'portal', 'sidebar',
 		'new-conv', 'conv-list', 'open-admin-key', 'lock-now-side', 'pane', 'back', 'pane-title',
 		'sync', 'toggle-archived', 'conv-settings', 'lock-now', 'archived-banner', 'leave-archived',
 		'thread', 'compose', 'compose-body', 'compose-send', 'compose-status', 'conv-dialog',
@@ -53,6 +55,9 @@
 		bad_days: 'Enter a whole number of days, 1 or more, or leave it empty.',
 		mismatch: 'The two password entries do not match. Type them again.',
 		forbidden: 'Only the admin can do that.',
+		no_consent: 'Tick the box to agree before signing in.',
+		bad_request: 'Something went wrong. Try again.',
+		server: 'Something went wrong. Try again.',
 		network: 'Could not reach the server. Check your connection and try again.',
 		setup: 'This page is not connected to its server yet.'
 	};
@@ -81,6 +86,33 @@
 			method: 'POST',
 			headers: headers,
 			body: JSON.stringify(args),
+			cache: 'no-store',
+			referrerPolicy: 'no-referrer'
+		}).then(function (response) {
+			if (!response.ok) {
+				return { ok: false, error: 'network' };
+			}
+			return response.json();
+		}).then(function (data) {
+			return data && typeof data === 'object' ? data : { ok: false, error: 'network' };
+		}).catch(function () {
+			return { ok: false, error: 'network' };
+		});
+	}
+
+	// Calls one Edge Function. Same result shape as rpc.
+	function fn(name, body) {
+		if (!config.functions || !config.key) {
+			return Promise.resolve({ ok: false, error: 'setup' });
+		}
+		var headers = { 'Content-Type': 'application/json', 'apikey': config.key };
+		if (config.key.indexOf('sb_') !== 0) {
+			headers['Authorization'] = 'Bearer ' + config.key;
+		}
+		return fetch(config.functions + '/' + name, {
+			method: 'POST',
+			headers: headers,
+			body: JSON.stringify(body),
 			cache: 'no-store',
 			referrerPolicy: 'no-referrer'
 		}).then(function (response) {
@@ -386,6 +418,7 @@
 	function unlock(result) {
 		token = result.token;
 		role = result.role === 'admin' ? 'admin' : 'guest';
+		watermark = result.watermark || null;
 		conversations = [];
 		current = null;
 		viewArchived = false;
@@ -415,6 +448,7 @@
 		var old = token;
 		token = null;
 		role = null;
+		watermark = null;
 		conversations = [];
 		current = null;
 		viewArchived = false;
@@ -444,12 +478,16 @@
 		el['lock-password'].focus();
 	}
 
+	if (config.notice && config.notice.text) {
+		el['lock-notice'].textContent = config.notice.text;
+	}
+
 	el['lock-form'].addEventListener('submit', function (event) {
 		event.preventDefault();
 		var password = el['lock-password'].value;
 		el['lock-submit'].disabled = true;
 		setNote(el['lock-status'], 'Checking');
-		rpc('m_open', { p_password: password }).then(function (result) {
+		fn('open', { password: password, notice_version: el['lock-ack'].checked ? config.notice.version : 0 }).then(function (result) {
 			el['lock-submit'].disabled = false;
 			el['lock-password'].value = '';
 			if (result.ok && result.token) {

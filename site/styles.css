@@ -140,6 +140,7 @@ body {
 }
 
 .lock-label { color: var(--muted); font-size: 0.9rem; }
+.lock-ack { display: flex; gap: 8px; align-items: center; font-size: 0.9rem; }
 
 /* Portal: a single pane for the other person; list plus pane for the admin. */
 
