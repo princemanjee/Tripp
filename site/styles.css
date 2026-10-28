@@ -363,6 +363,16 @@ body {
 	font-size: 0.9rem;
 }
 
+.check-row {
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+	margin: 12px 0 0;
+	font-size: 0.9rem;
+}
+
+.check-row input { margin-top: 3px; }
+
 .dialog-row {
 	display: flex;
 	flex-wrap: wrap;

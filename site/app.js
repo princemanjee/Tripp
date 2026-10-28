@@ -33,7 +33,8 @@
 		'conv-form', 'conv-dialog-title', 'conv-label', 'conv-password', 'conv-password-again',
 		'conv-hint', 'conv-status', 'conv-delete', 'conv-cancel', 'conv-save', 'admin-key-dialog',
 		'admin-key-form', 'admin-key-new', 'admin-key-again', 'admin-key-status', 'admin-key-cancel',
-		'admin-key-save'].forEach(function (id) {
+		'admin-key-save', 'conv-hold-row', 'conv-hold', 'retention-days', 'retention-status',
+		'retention-save'].forEach(function (id) {
 		el[id] = document.getElementById(id);
 	});
 
@@ -49,6 +50,7 @@
 		label_too_long: 'Keep the name under 100 characters.',
 		no_conversation: 'That conversation no longer exists.',
 		no_message: 'That message no longer exists.',
+		bad_days: 'Enter a whole number of days, 1 or more, or leave it empty.',
 		mismatch: 'The two password entries do not match. Type them again.',
 		forbidden: 'Only the admin can do that.',
 		network: 'Could not reach the server. Check your connection and try again.',
@@ -553,6 +555,8 @@
 		el['conv-label'].value = conv ? conv.label : '';
 		el['conv-hint'].hidden = !conv;
 		el['conv-delete'].hidden = !conv;
+		el['conv-hold-row'].hidden = !conv;
+		el['conv-hold'].checked = Boolean(conv && conv.legal_hold);
 		el['conv-save'].textContent = conv ? 'Save changes' : 'Create';
 		el['conv-dialog'].showModal();
 		el['conv-label'].focus();
@@ -611,6 +615,27 @@
 		});
 	});
 
+	// The hold applies at once; it does not wait for Save changes.
+	el['conv-hold'].addEventListener('change', function () {
+		var box = el['conv-hold'];
+		var want = box.checked;
+		box.disabled = true;
+		rpc('m_conv_hold', { p_token: token, p_id: editing, p_hold: want }).then(function (result) {
+			box.disabled = false;
+			if (result.ok) {
+				setNote(el['conv-status'], want ? 'Legal hold is on.' : 'Legal hold is off.');
+				loadConversations();
+			} else {
+				box.checked = !want;
+				if (result.error === 'expired') {
+					lock('expired');
+				} else {
+					setStatus(el['conv-status'], result.error || 'network');
+				}
+			}
+		});
+	});
+
 	el['conv-delete'].addEventListener('click', function () {
 		if (!deleteArmed) {
 			deleteArmed = true;
@@ -640,7 +665,49 @@
 	el['open-admin-key'].addEventListener('click', function () {
 		el['admin-key-form'].reset();
 		setStatus(el['admin-key-status'], '');
+		setStatus(el['retention-status'], '');
+		el['retention-days'].value = '';
+		el['retention-days'].disabled = true;
+		el['retention-save'].disabled = true;
 		el['admin-key-dialog'].showModal();
+		rpc('m_settings', { p_token: token }).then(function (result) {
+			if (result.ok) {
+				el['retention-days'].value = result.retention_days === null ? '' : String(result.retention_days);
+				el['retention-days'].disabled = false;
+				el['retention-save'].disabled = false;
+			} else if (result.error === 'expired') {
+				el['admin-key-dialog'].close();
+				lock('expired');
+			} else {
+				setStatus(el['retention-status'], result.error || 'network');
+			}
+		});
+	});
+
+	el['retention-save'].addEventListener('click', function () {
+		var raw = el['retention-days'].value.trim();
+		var days = null;
+		if (raw !== '') {
+			if (!/^[0-9]+$/.test(raw) || Number(raw) < 1) {
+				setStatus(el['retention-status'], 'bad_days');
+				return;
+			}
+			days = Number(raw);
+		}
+		el['retention-save'].disabled = true;
+		setNote(el['retention-status'], 'Saving');
+		rpc('m_settings', { p_token: token, p_retention_days: days, p_save: true }).then(function (result) {
+			el['retention-save'].disabled = false;
+			if (result.ok) {
+				setNote(el['retention-status'], result.retention_days === null
+					? 'Nothing will be deleted.'
+					: 'Saved. Older messages and logs are deleted daily after ' + result.retention_days + ' days.');
+			} else if (result.error === 'expired') {
+				lock('expired');
+			} else {
+				setStatus(el['retention-status'], result.error || 'network');
+			}
+		});
 	});
 
 	el['admin-key-cancel'].addEventListener('click', function () {

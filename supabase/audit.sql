@@ -232,9 +232,26 @@ begin
 end;
 $$;
 
+-- True when a retention_purge event recorded this hash as the anchor for the table.
+create or replace function tripp.is_anchor(p_table text, p_hash text)
+returns boolean
+language sql
+stable
+set search_path = ''
+as $$
+	select exists (
+		select 1 from tripp.events e
+		 where e.type = 'retention_purge'
+		   and e.detail ->> 'table' = p_table
+		   and e.detail ->> 'anchor' = p_hash
+	);
+$$;
+
 -- Walks a chain from the first row and recomputes every hash. Returns
 -- {"ok", "rows", "first_bad_id"}; the first row must start from the genesis
--- hash of 64 zeros. p_table is 'visits' or 'events'; anything else returns
+-- hash of 64 zeros, or from the anchor of a retention_purge event recorded for
+-- that table (the oldest rows were deleted by the retention window).
+-- p_table is 'visits' or 'events'; anything else returns
 -- {"ok": false, "error": "unknown_table"}.
 create or replace function tripp.verify_chain(p_table text)
 returns json
@@ -251,7 +268,7 @@ begin
 	if p_table = 'visits' then
 		for rv in select * from tripp.visits order by id loop
 			n := n + 1;
-			if rv.prev_hash <> prev
+			if (rv.prev_hash <> prev and not (n = 1 and tripp.is_anchor('visits', rv.prev_hash)))
 				or rv.row_hash <> tripp.chain_hash(rv.prev_hash, tripp.visit_payload(rv)) then
 				bad := rv.id;
 				exit;
@@ -261,7 +278,7 @@ begin
 	elsif p_table = 'events' then
 		for re in select * from tripp.events order by id loop
 			n := n + 1;
-			if re.prev_hash <> prev
+			if (re.prev_hash <> prev and not (n = 1 and tripp.is_anchor('events', re.prev_hash)))
 				or re.row_hash <> tripp.chain_hash(re.prev_hash, tripp.event_payload(re)) then
 				bad := re.id;
 				exit;
@@ -282,6 +299,7 @@ revoke all on function tripp.audit_append_only() from public, anon, authenticate
 revoke all on function tripp.log_visit(text, bigint, text, text, text, text, jsonb) from public, anon, authenticated;
 revoke all on function tripp.log_event(text, bigint, bigint, bigint, jsonb) from public, anon, authenticated;
 revoke all on function tripp.verify_chain(text) from public, anon, authenticated;
+revoke all on function tripp.is_anchor(text, text) from public, anon, authenticated;
 
 -- The session's sign-in visit, or null if the token is unknown. Does not touch
 -- last_seen.

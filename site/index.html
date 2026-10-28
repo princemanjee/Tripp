@@ -29,7 +29,7 @@
 			</header>
 			<ul id="conv-list" class="conv-list"></ul>
 			<footer class="sidebar-foot">
-				<button id="open-admin-key" class="button button-quiet" type="button">My password</button>
+				<button id="open-admin-key" class="button button-quiet" type="button">Settings</button>
 				<button id="lock-now-side" class="button button-quiet" type="button">Lock</button>
 			</footer>
 		</aside>
@@ -73,6 +73,10 @@
 			<label class="dialog-label" for="conv-password-again">Their password again</label>
 			<input id="conv-password-again" class="field" type="password" autocomplete="new-password">
 			<p id="conv-hint" class="hint">Leave the password empty to keep the current one.</p>
+			<label id="conv-hold-row" class="check-row" hidden>
+				<input id="conv-hold" type="checkbox">
+				<span>Legal hold (nothing in this conversation is deleted by the retention window)</span>
+			</label>
 			<p id="conv-status" class="status" role="status" aria-live="polite"></p>
 			<div class="dialog-row">
 				<button id="conv-delete" class="button button-danger" type="button">Delete conversation</button>
@@ -86,7 +90,7 @@
 
 	<dialog id="admin-key-dialog" class="dialog">
 		<form id="admin-key-form" autocomplete="off">
-			<h2 class="dialog-title">Change my password</h2>
+			<h2 class="dialog-title">Settings</h2>
 			<label class="dialog-label" for="admin-key-new">New password</label>
 			<input id="admin-key-new" class="field" type="password" autocomplete="new-password" required>
 			<label class="dialog-label" for="admin-key-again">New password again</label>
@@ -95,8 +99,17 @@
 			<div class="dialog-row">
 				<span></span>
 				<span class="dialog-row-end">
-					<button id="admin-key-cancel" class="button button-quiet" type="button">Close</button>
 					<button id="admin-key-save" class="button button-primary" type="submit">Save password</button>
+				</span>
+			</div>
+			<label class="dialog-label" for="retention-days">Delete messages and logs older than [ ] days (empty = keep everything)</label>
+			<input id="retention-days" class="field" type="number" min="1" step="1" inputmode="numeric">
+			<p id="retention-status" class="status" role="status" aria-live="polite"></p>
+			<div class="dialog-row">
+				<span></span>
+				<span class="dialog-row-end">
+					<button id="retention-save" class="button button-primary" type="button">Save retention</button>
+					<button id="admin-key-cancel" class="button button-quiet" type="button">Close</button>
 				</span>
 			</div>
 		</form>

@@ -402,6 +402,7 @@ begin
 			select c.id,
 			       c.label,
 			       c.created_at,
+			       c.legal_hold,
 			       (select max(m.created_at) from tripp.messages m
 			         where m.conversation_id = c.id and not m.archived) as last_at,
 			       (select m.author = 'guest' from tripp.messages m
