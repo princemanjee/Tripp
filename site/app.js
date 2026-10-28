@@ -28,7 +28,7 @@
 	var watermark = null;
 
 	var el = {};
-	['lock', 'lock-form', 'lock-password', 'lock-notice', 'lock-ack', 'lock-submit', 'lock-status', 'portal', 'sidebar',
+	['lock', 'lock-form', 'lock-password', 'lock-submit', 'lock-status', 'portal', 'sidebar',
 		'new-conv', 'conv-list', 'open-admin-key', 'lock-now-side', 'pane', 'back', 'pane-title',
 		'sync', 'toggle-archived', 'conv-settings', 'lock-now', 'archived-banner', 'leave-archived',
 		'thread', 'compose', 'compose-body', 'compose-send', 'compose-status', 'conv-dialog',
@@ -55,7 +55,6 @@
 		bad_days: 'Enter a whole number of days, 1 or more, or leave it empty.',
 		mismatch: 'The two password entries do not match. Type them again.',
 		forbidden: 'Only the admin can do that.',
-		no_consent: 'Tick the box to agree before signing in.',
 		bad_request: 'Something went wrong. Try again.',
 		server: 'Something went wrong. Try again.',
 		network: 'Could not reach the server. Check your connection and try again.',
@@ -478,16 +477,12 @@
 		el['lock-password'].focus();
 	}
 
-	if (config.notice && config.notice.text) {
-		el['lock-notice'].textContent = config.notice.text;
-	}
-
 	el['lock-form'].addEventListener('submit', function (event) {
 		event.preventDefault();
 		var password = el['lock-password'].value;
 		el['lock-submit'].disabled = true;
 		setNote(el['lock-status'], 'Checking');
-		fn('open', { password: password, notice_version: el['lock-ack'].checked ? config.notice.version : 0 }).then(function (result) {
+		fn('open', { password: password }).then(function (result) {
 			el['lock-submit'].disabled = false;
 			el['lock-password'].value = '';
 			if (result.ok && result.token) {

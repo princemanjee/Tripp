@@ -3,7 +3,7 @@
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Deliver spec §11 Stage 0. It ships in two parts, each releasable on its own.
-- **0a:** keep-alive, a tamper-evident audit log of every visit and action, a consent notice, and the non-admin focus-loss lock with a watermark.
+- **0a:** keep-alive, a tamper-evident audit log of every visit and action, a ~~consent notice~~ (removed in Task 6b, owner directive 2026-10-28: no notice or consent anywhere on the site), and the non-admin focus-loss lock with a watermark.
 - **0b:** client-side-encrypted file attachments, the key store, and retention with a legal hold.
 
 **Architecture:** The site stays static on GitHub Pages. Two new Supabase Edge Functions run as server code we control:
@@ -39,7 +39,7 @@ Every audit row is written by SECURITY DEFINER SQL into append-only, hash-chaine
 
 - **Database password** each working session. It goes in the env var `TRIPP_DB_PASSWORD` for that command only and is never stored.
 - **Supabase personal access token**, needed to deploy Edge Functions: Dashboard → Account → Access Tokens. It goes in the env var `SUPABASE_ACCESS_TOKEN` per session and is never stored. This is not the OAuth link.
-- **Final consent-notice wording** from you or the lawyer. Task 6 ships the placeholder text below as notice version 1.
+- ~~Final consent-notice wording~~ — not needed. Owner directive 2026-10-28: the site carries no notice, consent or legal language; Task 6b removed it.
 - **Run the keep-alive on the Mac Studio:** copy `ops/keepalive/` there and run `docker compose up -d --build`. Rebuild after Task 12 adds the sweep.
 - **Your files passphrase**, typed into the browser once at setup (after Task 12). Nobody else ever sees it.
 
@@ -88,8 +88,8 @@ Every audit row is written by SECURITY DEFINER SQL into append-only, hash-chaine
 | `supabase/functions/media/index.ts` | Create: the signed-URL and sweep Edge Function |
 | `supabase/functions/spike/index.ts` | Temporary (Task 1), deleted afterward |
 | `site/crypto.js` | Create: `window.TrippCrypto` (all WebCrypto) |
-| `site/app.js` | Modify: sign-in through `open`, consent, focus lock, watermark, audit viewer, attachments, key UI, hold and retention UI |
-| `site/index.html`, `site/styles.css`, `site/config.js` | Modify: new elements, CSP, `functions` URL, notice |
+| `site/app.js` | Modify: sign-in through `open`, focus lock, watermark, audit viewer, attachments, key UI, hold and retention UI |
+| `site/index.html`, `site/styles.css`, `site/config.js` | Modify: new elements, CSP, `functions` URL |
 | `scripts/deploy.ps1:36` | Modify: add `crypto.js` to the version-stamped files |
 | `ops/keepalive/*` | Create: keep-alive container (Dockerfile, script, crontab, compose) |
 | `tests/sql/*.sql` | Create: one file per task, `do $$ … assert … $$` blocks |
@@ -99,7 +99,7 @@ Every audit row is written by SECURITY DEFINER SQL into append-only, hash-chaine
 
 ---
 
-# Part 0a — Audit, consent, anti-leak, keep-alive
+# Part 0a — Audit, anti-leak, keep-alive
 
 ### Task 1: Test harness + platform spike
 
@@ -222,13 +222,13 @@ The owner's standing rule: no GitHub Actions or GitHub-hosted workflows, ever. T
 **Interfaces:**
 - Consumes: `log_visit`, `log_event`, `verify_chain` (Task 3)
 - Produces:
-  - `tripp.open_session(p_password text, p_ip text, p_ua text, p_os text, p_browser text, p_geo jsonb, p_notice_version int) returns json`. This is `m_open`'s current logic, with these changes:
+  - `tripp.open_session(p_password text, p_ip text, p_ua text, p_os text, p_browser text, p_geo jsonb) returns json`. This is `m_open`'s current logic, with these changes (Task 6b removed the `p_notice_version` argument and the consent check, per the owner directive of 2026-10-28):
     - The lockout is keyed on `p_ip`.
     - Each outcome writes one visit: `ok` with scope 0 or the conversation id, `denied` with scope null, or `locked` with scope null.
     - A failure also writes event `login_failed`, with detail `{"reason": "denied"|"locked"}`.
-    - On success it writes event `login` and then event `consent_ack` with detail `{"notice_version": n}`.
+    - On success it writes event `login` only. (`consent_ack` stays in the type list but is unused.)
     - It stores `visit_id` on the session row.
-    - A null or <1 `p_notice_version` returns `{"ok":false,"error":"no_consent"}` and writes nothing except the attempt row.
+    - ~~No-consent check~~ removed in Task 6b.
     - The return adds `"watermark": {"conversation": id, "ip": p_ip}` for guests.
 
     It is not granted to anon. Only the Edge Function calls it.
@@ -248,10 +248,10 @@ The owner's standing rule: no GitHub Actions or GitHub-hosted workflows, ever. T
     `m_close` logs only when a session row was actually deleted. Every event takes `scope` from `session_scope` and `visit_id` from `token_visit`.
 
 - [ ] **Step 1: Write the failing tests.** Each test sets a known admin hash with `update tripp.admin_key set hash = extensions.crypt('t-admin', extensions.gen_salt('bf', 4))`, which ROLLBACK restores, and creates a conversation with password `t-guest`. Assert:
-  - `open_session('t-admin','198.51.100.7','UA','Windows','Edge','{}',1)` → `ok`, `role = admin`. The latest visit has `outcome = 'ok'`, `scope = 0`, `isp = 'unknown'`. The last two events are `login` then `consent_ack` with `notice_version = 1`.
+  - `open_session('t-admin','198.51.100.7','UA','Windows','Edge','{}')` → `ok`, `role = admin`. The latest visit has `outcome = 'ok'`, `scope = 0`, `isp = 'unknown'`. The last two events are `login` only (Task 6b).
   - A wrong password → `denied`, a visit with `outcome = 'denied'` and scope null, and a `login_failed` event.
   - 8 wrong tries from one IP, then a 9th → `locked` and a `locked` visit.
-  - `p_notice_version = 0` → `no_consent` and no new visit.
+  - ~~`p_notice_version = 0` → `no_consent`~~ removed in Task 6b.
   - The guest `open_session` return has `watermark.conversation` equal to the conversation id.
   - `to_regprocedure('public.m_open(text)') is null`.
   - `031_events.sql`: each row of the mapping table yields exactly one event of that type with the right `ref_id`. `m_close` on an unknown token adds zero events. `verify_chain` is ok on both tables at the end. `m_audit` with a guest token → `forbidden`.
@@ -260,22 +260,22 @@ The owner's standing rule: no GitHub Actions or GitHub-hosted workflows, ever. T
 - [ ] **Step 4:** Run `node scripts/sql.mjs test`, the full suite. Expected: all PASS.
 - [ ] **Step 5:** Commit with `git commit -m "Log every visit and action; move sign-in to open_session"`. Do not apply yet. Task 6 deploys the function and the schema together, so live sign-in never breaks.
 
-### Task 6: `open` Edge Function, consent notice, sign-in UI
+### Task 6: `open` Edge Function, sign-in UI (the consent notice originally here was removed in Task 6b)
 
 **Files:**
 - Create: `supabase/functions/open/index.ts`
-- Modify: `site/config.js` (`functions: 'https://ohhkzjsdabdimlrgnagw.supabase.co/functions/v1'` and the `notice` object), `site/index.html` (notice and checkbox on the lock form), `site/app.js` (sign-in path), `site/styles.css`
+- Modify: `site/config.js` (`functions: 'https://ohhkzjsdabdimlrgnagw.supabase.co/functions/v1'`), `site/index.html` (no notice or checkbox: removed in Task 6b), `site/app.js` (sign-in path), `site/styles.css`
 
 **Interfaces:**
 - Consumes: `parseUserAgent`, `lookupGeo`, `clientIp`, `cors`, `json` (Task 4); `tripp.open_session` (Task 5)
 - Produces:
-  - `POST {functions}/open` with body `{"password": string, "notice_version": number}` → the same JSON `open_session` returns. `OPTIONS` → 204 with CORS headers. Any other method → 405. A body that won't parse → `{"ok":false,"error":"bad_request"}`.
+  - `POST {functions}/open` with body `{"password": string}` (Task 6b dropped `notice_version`) → the same JSON `open_session` returns. `OPTIONS` → 204 with CORS headers. Any other method → 405. A body that won't parse → `{"ok":false,"error":"bad_request"}`.
   - The DB is reached with `postgres(Deno.env.get('SUPABASE_DB_URL'), {prepare: false})`, then `select tripp.open_session($1,…)`.
   - `app.js`: `fn(name, body) → Promise<{ok,…}>`. It does for Edge Functions what `rpc` does, with the same `network`/`setup` error shape.
-  - `config.notice = { version: 1, text: '…' }`. Version 1 text (placeholder until the owner supplies the final wording): "Everything you do here is recorded: when you visit, your IP address and approximate location, your device and browser, and every message and file. Records are kept and may be shared with legal counsel or produced in legal proceedings. Tick the box to continue."
-  - New `ERRORS`: `no_consent: 'Tick the box to agree before signing in.'` and `bad_request` (generic).
+  - ~~`config.notice`~~ removed in Task 6b: no notice text anywhere on the site.
+  - New `ERRORS`: `bad_request` (generic). (`no_consent` was removed in Task 6b.)
 
-- [ ] **Step 1:** Add `<p id="lock-notice">` with its text set from `config.notice.text` and a required `<input type="checkbox" id="lock-ack">` labelled "I have read this and agree" above Unlock. Submit sends `notice_version: el['lock-ack'].checked ? config.notice.version : 0`.
+- [ ] **Step 1:** ~~Add a notice and an agreement checkbox~~ (removed in Task 6b). Submit sends `{password}` only.
 - [ ] **Step 2:** Implement `open/index.ts`. Pass `parseUserAgent(req.headers.get('user-agent') || '')`, `await lookupGeo(ip)`, and `p_ua` truncated to 512 characters.
 - [ ] **Step 3: Deploy in order.**
   1. `npx supabase@2.54.11 functions deploy open --project-ref ohhkzjsdabdimlrgnagw --no-verify-jwt --use-api`
@@ -327,7 +327,7 @@ The owner's standing rule: no GitHub Actions or GitHub-hosted workflows, ever. T
   - "Load older" passes the last id as `p_before`.
 
 - [ ] **Step 1:** Implement.
-- [ ] **Step 2:** Verify live, as admin: the dialog shows Task 6's sign-in visit and its `login` and `consent_ack` events, and the badge says intact.
+- [ ] **Step 2:** Verify live, as admin: the dialog shows Task 6's sign-in visit and its `login` event, and the badge says intact.
 - [ ] **Step 3:** Deploy and commit with `git commit -m "Add read-only audit log viewer with chain check"`.
 
 **Part 0a release checkpoint:** run the full `node scripts/sql.mjs test` and `node --test tests/js/`, and confirm the live checks in Tasks 6–8 passed. Then ask the owner to push `main`.

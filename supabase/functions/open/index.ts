@@ -1,5 +1,5 @@
 // Sign-in. Checks the password through tripp.open_session, recording the visit
-// (IP, device, approximate location, consent version) on the way.
+// (IP, device, approximate location) on the way.
 import postgres from 'npm:postgres@3.4.4';
 import { parseUserAgent } from '../_shared/ua.js';
 import { lookupGeo } from '../_shared/geo.js';
@@ -25,15 +25,13 @@ Deno.serve(async (req: Request) => {
     if (!body || typeof body.password !== 'string') {
       return json({ ok: false, error: 'bad_request' }, 200, origin);
     }
-    const nv = Number(body.notice_version);
-    const noticeVersion = Number.isInteger(nv) ? nv : 0;
 
     const ua = (req.headers.get('user-agent') || '').slice(0, 512);
     const { os, browser } = parseUserAgent(ua);
     const ip = clientIp(req.headers);
     const geo = await lookupGeo(ip);
 
-    const rows = await sql`select tripp.open_session(${body.password}, ${ip}, ${ua}, ${os}, ${browser}, ${JSON.stringify(geo)}::text::jsonb, ${noticeVersion}) as r`;
+    const rows = await sql`select tripp.open_session(${body.password}, ${ip}, ${ua}, ${os}, ${browser}, ${JSON.stringify(geo)}::text::jsonb) as r`;
     return json(rows[0].r, 200, origin);
   } catch (e) {
     console.error('open failed:', e instanceof Error ? e.message : 'unknown');

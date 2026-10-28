@@ -324,7 +324,7 @@ earlier one.
   file attachments** (Storage private bucket + Edge Function signed URLs +
   extended `m_post`/`m_list`) with **client-side AES-GCM encryption** (§7a); the
   **key store** + root-KEK scheme (§7a); the **retention window + legal-hold**
-  flag (§14 Q2); the **consent notice + logged acknowledgement** (§14 Q3); and the
+  flag (§14 Q2); ~~the consent notice + logged acknowledgement~~ (removed by owner directive, 2026-10-28; §14 Q3); and the
   non-admin **focus-loss lock + identity watermark** (§9a). Proves the Storage +
   Edge-Function + encryption pattern on the lowest-risk feature. *(Scope grew with
   the 2026-10-27 answers; Stage 0 may be split into 0a/0b at planning time to keep
@@ -451,10 +451,14 @@ earlier one.
    duration is a config value the owner sets after consulting the lawyer. See the
    new **§7a** for the encryption/export/key-management requirements added with
    this answer.
-3. **RESOLVED (owner, 2026-10-27): notice + logged acknowledgement.** The lock
-   screen shows the logging/retention notice and requires the user to acknowledge
-   it; the acknowledgement is written to `tripp.events`. (Users also sign forms
-   out-of-band before being granted access.) Anti-leak measures (focus-loss lock,
+3. **SUPERSEDED (owner, 2026-10-28): no notice, no acknowledgement.** The owner
+   directed that the site carry no disclaimer, consent notice, recording warning,
+   agreement tick box or legal language of any kind; logging continues
+   unannounced. The notice and tick box shipped in Task 6 were removed in Task 6b
+   and the server no longer requires consent. `consent_ack` stays in the
+   `events.type` CHECK list but is unused. (Earlier answer, 2026-10-27: notice +
+   logged acknowledgement. Users also sign forms out-of-band before being granted
+   access.) Anti-leak measures (focus-loss lock,
    identity watermark) added in the new **§9a** — note the honest limit there:
    screenshot *prevention* is not possible on the web.
 4. **Geo-IP provider.** ip-api.com free tier is non-commercial; if Tripp is ever

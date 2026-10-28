@@ -20,8 +20,8 @@ begin
 	insert into tripp.conversations (label, hash)
 	values ('t-conv', extensions.crypt(g, extensions.gen_salt('bf', 4))) returning id into conv;
 	delete from tripp.attempts where ip = '198.51.100.9';
-	adm := tripp.open_session('t-admin', '198.51.100.9', 'UA', 'Windows', 'Edge', '{}', 1) ->> 'token';
-	gst := tripp.open_session(g, '198.51.100.9', 'UA', 'Mac', 'Safari', '{}', 1) ->> 'token';
+	adm := tripp.open_session('t-admin', '198.51.100.9', 'UA', 'Windows', 'Edge', '{}') ->> 'token';
+	gst := tripp.open_session(g, '198.51.100.9', 'UA', 'Mac', 'Safari', '{}') ->> 'token';
 	vid := tripp.token_visit(adm);
 
 	-- m_post: guest and admin.
@@ -138,7 +138,7 @@ begin
 	assert e.type = 'logout' and e.scope = conv and e.visit_id = vid and e.ref_id is null, 'logout event';
 
 	-- m_audit.
-	gst := tripp.open_session(g, '198.51.100.9', 'UA', 'Mac', 'Safari', '{}', 1) ->> 'token';
+	gst := tripp.open_session(g, '198.51.100.9', 'UA', 'Mac', 'Safari', '{}') ->> 'token';
 	r := public.m_audit(gst, 'events');
 	assert (r ->> 'error') = 'forbidden', 'guest audit forbidden';
 	r := public.m_audit('bad', 'events');

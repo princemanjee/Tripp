@@ -316,11 +316,11 @@ $$;
 -- until the oldest of them is 15 minutes old. A failure returns a result
 -- rather than raising, so the attempt row is kept. Every outcome (ok, denied,
 -- locked) writes one visit, and a failure also writes a login_failed event. A
--- success writes login and then consent_ack. A missing notice version returns
--- no_consent and writes no visit and no event.
+-- success writes login. (consent_ack stays in the events.type list but is unused.)
+drop function if exists tripp.open_session(text, text, text, text, text, jsonb, int);
 create or replace function tripp.open_session(
 	p_password text, p_ip text, p_ua text, p_os text, p_browser text,
-	p_geo jsonb, p_notice_version int
+	p_geo jsonb
 ) returns json
 language plpgsql volatile set search_path = ''
 as $$
@@ -341,11 +341,6 @@ begin
 		v_visit := tripp.log_visit('locked', null, v_ip, p_ua, p_os, p_browser, p_geo);
 		perform tripp.log_event('login_failed', null, v_visit, null, jsonb_build_object('reason', 'locked'));
 		return json_build_object('ok', false, 'error', 'locked');
-	end if;
-
-	if p_notice_version is null or p_notice_version < 1 then
-		insert into tripp.attempts (ip) values (v_ip);
-		return json_build_object('ok', false, 'error', 'no_consent');
 	end if;
 
 	if p_password is not null and p_password <> '' then
@@ -371,8 +366,6 @@ begin
 	values (tripp.token_hash(v_token), v_conversation, v_visit);
 	delete from tripp.attempts where ip = v_ip;
 	perform tripp.log_event('login', coalesce(v_conversation, 0), v_visit, null, '{}'::jsonb);
-	perform tripp.log_event('consent_ack', coalesce(v_conversation, 0), v_visit, null,
-		jsonb_build_object('notice_version', p_notice_version));
 
 	if v_admin then
 		return json_build_object('ok', true, 'token', v_token, 'role', 'admin');
@@ -424,7 +417,7 @@ end;
 $$;
 
 revoke all on function tripp.token_visit(text) from public, anon, authenticated;
-revoke all on function tripp.open_session(text, text, text, text, text, jsonb, int) from public, anon, authenticated;
+revoke all on function tripp.open_session(text, text, text, text, text, jsonb) from public, anon, authenticated;
 revoke all on function public.m_audit(text, text, bigint, int) from public;
 grant execute on function public.m_audit(text, text, bigint, int) to anon, authenticated;
 
