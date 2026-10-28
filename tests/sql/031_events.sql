@@ -32,6 +32,7 @@ begin
 	assert (select count(*) from tripp.events where id > ev0) = 1, 'one event for guest post';
 	assert e.type = 'message' and e.scope = conv and e.detail ->> 'author' = 'guest'
 		and (e.detail ->> 'length')::int = 5, 'guest message event';
+	assert e.detail ->> 'sha256' = encode(sha256(convert_to('hello', 'UTF8')), 'hex'), 'guest message sha256';
 	mid := e.ref_id;
 	assert exists (select 1 from tripp.messages where id = mid and conversation_id = conv), 'ref_id is message id';
 	assert e.visit_id = tripp.token_visit(gst), 'event has visit id';
@@ -40,6 +41,8 @@ begin
 	r := public.m_post(adm, 'owner says', conv);
 	select * into e from tripp.events where id > ev0;
 	assert e.type = 'message' and e.scope = 0 and e.detail ->> 'author' = 'owner' and e.visit_id = vid, 'admin message event';
+	assert (e.detail ->> 'conversation')::bigint = conv, 'admin message event names conversation';
+	assert e.detail ->> 'sha256' = encode(sha256(convert_to('owner says', 'UTF8')), 'hex'), 'admin message sha256';
 	mid2 := e.ref_id;
 
 	-- Failed post logs nothing.
@@ -59,6 +62,7 @@ begin
 		select * into e from tripp.events where id > ev0;
 		assert (select count(*) from tripp.events where id > ev0) = 1, a || ' one event';
 		assert e.type = t and e.ref_id = mid and e.scope = 0 and e.visit_id = vid, a || ' event fields';
+		assert (e.detail ->> 'conversation')::bigint = conv, a || ' event names conversation';
 	end loop;
 	select coalesce(max(id), 0) into ev0 from tripp.events;
 	r := public.m_msg(adm, mid, 'frobnicate');
@@ -73,6 +77,7 @@ begin
 	select * into e from tripp.events where id > ev0;
 	assert (select count(*) from tripp.events where id > ev0) = 1, 'delete one event';
 	assert e.type = 'admin_delete' and e.ref_id = mid2, 'admin_delete event';
+	assert (e.detail ->> 'conversation')::bigint = conv, 'admin_delete event names conversation';
 
 	-- m_conv_save: create then change.
 	select coalesce(max(id), 0) into ev0 from tripp.events;
@@ -84,6 +89,7 @@ begin
 	assert e.type = 'admin_conv_save' and e.ref_id = conv2 and e.scope = 0
 		and (e.detail ->> 'created') = 'true' and (e.detail ->> 'label_changed') = 'true'
 		and (e.detail ->> 'password_changed') = 'true', 'create event detail';
+	assert (e.detail ->> 'conversation')::bigint = conv2, 'create event names conversation';
 
 	select coalesce(max(id), 0) into ev0 from tripp.events;
 	r := public.m_conv_save(adm, conv2, 'renamed', null);
@@ -92,6 +98,7 @@ begin
 	assert e.type = 'admin_conv_save' and e.ref_id = conv2 and (e.detail ->> 'created') = 'false'
 		and (e.detail ->> 'label_changed') = 'true' and (e.detail ->> 'password_changed') = 'false',
 		'change event detail';
+	assert (e.detail ->> 'conversation')::bigint = conv2, 'change event names conversation';
 	select coalesce(max(id), 0) into ev0 from tripp.events;
 	r := public.m_conv_save(adm, conv2, '', g);
 	assert (r ->> 'error') = 'password_taken', 'password_taken';
@@ -109,6 +116,7 @@ begin
 	assert (select count(*) from tripp.events where id > ev0) = 1, 'conv delete one event';
 	assert e.type = 'admin_conv_delete' and e.ref_id = conv2 and (e.detail ->> 'messages')::int = 2,
 		'conv delete detail';
+	assert (e.detail ->> 'conversation')::bigint = conv2, 'conv delete event names conversation';
 	select coalesce(max(id), 0) into ev0 from tripp.events;
 	r := public.m_conv_delete(adm, conv2);
 	assert (r ->> 'error') = 'no_conversation', 'second delete';
@@ -136,6 +144,24 @@ begin
 	select * into e from tripp.events where id > ev0;
 	assert (select count(*) from tripp.events where id > ev0) = 1, 'close one event';
 	assert e.type = 'logout' and e.scope = conv and e.visit_id = vid and e.ref_id is null, 'logout event';
+
+	-- m_close on an expired session still logs the real scope and visit.
+	gst := tripp.open_session(g, '198.51.100.9', 'UA', 'Mac', 'Safari', '{}') ->> 'token';
+	vid := tripp.token_visit(gst);
+	update tripp.sessions set last_seen = now() - interval '1 hour' where token_hash = tripp.token_hash(gst);
+	select coalesce(max(id), 0) into ev0 from tripp.events;
+	r := public.m_close(gst);
+	select * into e from tripp.events where id > ev0;
+	assert (select count(*) from tripp.events where id > ev0) = 1, 'expired close one event';
+	assert e.type = 'logout' and e.scope = conv and e.visit_id = vid, 'expired guest logout has real scope';
+	assert not exists (select 1 from tripp.sessions where token_hash = tripp.token_hash(gst)), 'expired session deleted';
+	a := 't-adm-exp-' || md5(random()::text);
+	insert into tripp.sessions (token_hash, conversation_id, created_at, last_seen)
+	values (tripp.token_hash(a), null, now() - interval '13 hours', now() - interval '13 hours');
+	select coalesce(max(id), 0) into ev0 from tripp.events;
+	r := public.m_close(a);
+	select * into e from tripp.events where id > ev0;
+	assert e.type = 'logout' and e.scope = 0 and e.visit_id is null, 'expired admin logout has scope 0';
 
 	-- m_audit.
 	gst := tripp.open_session(g, '198.51.100.9', 'UA', 'Mac', 'Safari', '{}') ->> 'token';

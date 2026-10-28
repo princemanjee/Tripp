@@ -6,7 +6,7 @@
 // POST {action, token, ...}:
 //   upload_url    {conversation?, kind, bytes} -> {ok, path, signed_url}
 //   download_url  {attachment}                 -> {ok, signed_url}
-//   sweep         (no token)                   -> {ok, removed}
+//   sweep         (no token)                   -> {ok, expired, removed}
 import postgres from 'npm:postgres@3.4.4';
 import { createClient } from 'npm:@supabase/supabase-js@2.45.4';
 import { cors, json } from '../_shared/http.js';
@@ -14,6 +14,7 @@ import { cors, json } from '../_shared/http.js';
 const BUCKET = 'tripp-media';
 const DOWNLOAD_SECONDS = 60;
 const SWEEP_LIMIT = 100;
+const SWEEP_ROUNDS = 10;
 
 const sql = postgres(Deno.env.get('SUPABASE_DB_URL')!, { prepare: false, max: 1 });
 const storage = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!, {
@@ -51,15 +52,22 @@ async function downloadUrl(body: any) {
   return { ok: true, signed_url: data.signedUrl };
 }
 
-// Paths stay queued until Storage confirms the remove, so a failure here is retried next time.
+// Moves expired reservations to the queue, then empties it in batches of
+// SWEEP_LIMIT, at most SWEEP_ROUNDS batches per call. Paths stay queued until
+// Storage confirms the remove, so a failure here is retried next time.
 async function sweep() {
-  const rows = await sql`select tripp.media_trash_take(${SWEEP_LIMIT}) as path`;
-  const paths: string[] = rows.map((row: any) => row.path);
-  if (!paths.length) return { ok: true, removed: 0 };
-  const { error } = await storage.remove(paths);
-  if (error) throw new Error('remove: ' + error.message);
-  await sql`select tripp.media_trash_done(array(select jsonb_array_elements_text(${JSON.stringify(paths)}::text::jsonb)))`;
-  return { ok: true, removed: paths.length };
+  const expired = await sql`select tripp.media_expire_reservations() as n`;
+  let removed = 0;
+  for (let round = 0; round < SWEEP_ROUNDS; round++) {
+    const rows = await sql`select tripp.media_trash_take(${SWEEP_LIMIT}) as path`;
+    const paths: string[] = rows.map((row: any) => row.path);
+    if (!paths.length) break;
+    const { error } = await storage.remove(paths);
+    if (error) throw new Error('remove: ' + error.message);
+    await sql`select tripp.media_trash_done(array(select jsonb_array_elements_text(${JSON.stringify(paths)}::text::jsonb)))`;
+    removed += paths.length;
+  }
+  return { ok: true, expired: expired[0].n, removed };
 }
 
 Deno.serve(async (req: Request) => {

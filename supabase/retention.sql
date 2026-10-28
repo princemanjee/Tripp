@@ -71,20 +71,25 @@ begin
 		return json_build_object('ok', false, 'error', 'no_conversation');
 	end if;
 	perform tripp.log_event('admin_legal_hold', v_scope, tripp.token_visit(p_token), p_id,
-		jsonb_build_object('hold', p_hold));
+		jsonb_build_object('hold', p_hold, 'conversation', p_id));
 	return json_build_object('ok', true);
 end;
 $$;
 
 -- Internal: the daily purge. Returns {"ok":true,"skipped":true} when retention
--- is off. Visits are purged before events so that both anchor events are
--- appended after the events purge.
+-- is off. The held conversation ids are read once, at the start, so a hold
+-- switched during the purge cannot split it. An event is held if its scope is
+-- a held id or its detail names a held conversation (admin events have scope
+-- 0). Visits are purged before events so that both anchor events are appended
+-- after the events purge. Deleted messages are recorded in a retention_purge
+-- event with table "messages" (no anchor, so is_anchor never matches it).
 create or replace function tripp.retention_purge() returns json
 language plpgsql volatile set search_path = ''
 as $$
 declare
 	v_days int;
 	v_window timestamptz;
+	v_held bigint[];
 	v_messages bigint;
 	v_cut bigint;
 	v_visit_rows bigint := 0;
@@ -97,12 +102,13 @@ begin
 		return json_build_object('ok', true, 'skipped', true);
 	end if;
 	v_window := now() - make_interval(days => v_days);
+	select coalesce(array_agg(c.id), '{}'::bigint[]) into v_held
+	  from tripp.conversations c where c.legal_hold;
 
 	with d as (
 		delete from tripp.messages m
 		 where m.created_at < v_window
-		   and not exists (select 1 from tripp.conversations c
-		                    where c.id = m.conversation_id and c.legal_hold)
+		   and m.conversation_id <> all (v_held)
 		returning 1
 	)
 	select count(*) into v_messages from d;
@@ -113,7 +119,7 @@ begin
 
 	select min(v.id) into v_cut from tripp.visits v
 	 where v.at >= v_window
-	    or v.scope in (select c.id from tripp.conversations c where c.legal_hold);
+	    or v.scope = any (v_held);
 	select v.row_hash into v_visit_anchor from tripp.visits v
 	 where v_cut is null or v.id < v_cut order by v.id desc limit 1;
 	with d as (
@@ -123,7 +129,9 @@ begin
 
 	select min(e.id) into v_cut from tripp.events e
 	 where e.at >= v_window
-	    or e.scope in (select c.id from tripp.conversations c where c.legal_hold);
+	    or e.scope = any (v_held)
+	    or (case when e.detail ->> 'conversation' ~ '^[0-9]{1,18}$'
+	             then (e.detail ->> 'conversation')::bigint end) = any (v_held);
 	select e.row_hash into v_event_anchor from tripp.events e
 	 where v_cut is null or e.id < v_cut order by e.id desc limit 1;
 	with d as (
@@ -140,6 +148,10 @@ begin
 	if v_event_rows > 0 then
 		perform tripp.log_event('retention_purge', null, null, null,
 			jsonb_build_object('table', 'events', 'rows', v_event_rows, 'anchor', v_event_anchor));
+	end if;
+	if v_messages > 0 then
+		perform tripp.log_event('retention_purge', null, null, null,
+			jsonb_build_object('table', 'messages', 'rows', v_messages, 'before', v_window::text));
 	end if;
 	return json_build_object('ok', true, 'messages', v_messages,
 		'visits', v_visit_rows, 'events', v_event_rows);

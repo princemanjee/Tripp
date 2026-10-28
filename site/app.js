@@ -71,6 +71,7 @@
 		label_too_long: 'Keep the name under 100 characters.',
 		no_conversation: 'That conversation no longer exists.',
 		no_message: 'That message no longer exists.',
+		no_attachment: 'That file is no longer available.',
 		bad_days: 'Enter a whole number of days, 1 or more, or leave it empty.',
 		mismatch: 'The two password entries do not match. Type them again.',
 		forbidden: 'Only the admin can do that.',
@@ -576,8 +577,14 @@
 
 	// ----- Compose -------------------------------------------------------------
 
+	// True while a send is in flight, so Ctrl+Enter cannot send the same draft twice.
+	var sending = false;
+
 	el['compose'].addEventListener('submit', function (event) {
 		event.preventDefault();
+		if (sending) {
+			return;
+		}
 		var body = el['compose-body'].value;
 		var files = pendingFiles.slice();
 		if (!body.trim() && !files.length) {
@@ -591,6 +598,7 @@
 			updateFiles();
 			return;
 		}
+		sending = true;
 		el['compose-send'].disabled = true;
 		el['attach'].disabled = true;
 		setNote(el['compose-status'], 'Sending');
@@ -607,6 +615,7 @@
 		}).catch(function (err) {
 			return err && err.error ? err : { ok: false, error: 'server' };
 		}).then(function (result) {
+			sending = false;
 			el['compose-send'].disabled = false;
 			el['attach'].disabled = false;
 			if (token !== t) {
@@ -856,9 +865,7 @@
 		rpc('m_settings', { p_token: token, p_retention_days: days, p_save: true }).then(function (result) {
 			el['retention-save'].disabled = false;
 			if (result.ok) {
-				setNote(el['retention-status'], result.retention_days === null
-					? 'Nothing will be deleted.'
-					: 'Saved. Older messages and logs are deleted daily after ' + result.retention_days + ' days.');
+				setNote(el['retention-status'], 'Saved');
 			} else if (result.error === 'expired') {
 				lock();
 			} else {
@@ -916,9 +923,7 @@
 		return (n / 1048576).toFixed(1) + ' MB';
 	}
 
-	var ATTACH_NOTES = ['Unlock files to attach', 'Attachments are not set up yet'];
-
-	// Shows Attach only when there is a key to encrypt with, and says why when there is not.
+	// Shows Attach only when there is a key to encrypt with.
 	function updateFiles() {
 		var admin = role === 'admin';
 		el['files-key'].hidden = !admin || !keysChecked || Boolean(ownerKey);
@@ -926,14 +931,6 @@
 		el['key-backup'].hidden = !admin || !ownerInfo;
 		var dek = currentDek();
 		el['attach'].hidden = !dek;
-		var note = '';
-		if (!dek && keysChecked) {
-			note = admin && !ownerKey ? ATTACH_NOTES[0] : ATTACH_NOTES[1];
-		}
-		var status = el['compose-status'];
-		if (!status.textContent || ATTACH_NOTES.indexOf(status.textContent) !== -1) {
-			setNote(status, note);
-		}
 		if (!dek && pendingFiles.length) {
 			pendingFiles = [];
 			renderPending();

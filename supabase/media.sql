@@ -73,6 +73,22 @@ as $$
 	select p_plain + 16 * greatest(1, ceil(p_plain / 1048576.0))::bigint;
 $$;
 
+-- Internal: move reservations more than a day old to the trash queue. An
+-- expired reservation may still have an object that was uploaded but never
+-- posted. Returns how many were moved.
+create or replace function tripp.media_expire_reservations() returns int
+language plpgsql volatile security definer set search_path = ''
+as $$
+declare
+	v_n int;
+begin
+	with d as (delete from tripp.uploads where created_at < now() - interval '1 day' returning path),
+	     q as (insert into tripp.storage_trash (path) select path from d on conflict do nothing returning 1)
+	select count(*) into v_n from d;
+	return v_n;
+end;
+$$;
+
 -- Internal: hand out an upload path. A guest reserves in their own
 -- conversation; the admin names one. Old reservations are cleared here.
 create or replace function tripp.media_reserve(p_token text, p_conversation bigint, p_kind text, p_bytes bigint)
@@ -87,9 +103,7 @@ begin
 	if v_scope is null then
 		return json_build_object('ok', false, 'error', 'expired');
 	end if;
-	-- An expired reservation may still have an object that was uploaded but never posted; queue it.
-	with d as (delete from tripp.uploads where created_at < now() - interval '1 day' returning path)
-	insert into tripp.storage_trash (path) select path from d on conflict do nothing;
+	perform tripp.media_expire_reservations();
 	if p_kind is null or p_kind not in ('file', 'audio', 'video') then
 		return json_build_object('ok', false, 'error', 'bad_kind');
 	end if;
@@ -112,9 +126,10 @@ $$;
 
 -- Internal: the Storage path of an attachment the caller may read. The other
 -- person sees only their own conversation, without hidden or archived messages.
+-- Volatile because session_scope touches the session.
 create or replace function tripp.media_readable(p_token text, p_attachment bigint)
 returns json
-language plpgsql stable security definer set search_path = ''
+language plpgsql volatile security definer set search_path = ''
 as $$
 declare
 	v_scope bigint := tripp.session_scope(p_token);
@@ -155,6 +170,7 @@ $$;
 
 revoke all on function tripp.attachment_trash() from public, anon, authenticated;
 revoke all on function tripp.cipher_size(bigint) from public, anon, authenticated;
+revoke all on function tripp.media_expire_reservations() from public, anon, authenticated;
 revoke all on function tripp.media_reserve(text, bigint, text, bigint) from public, anon, authenticated;
 revoke all on function tripp.media_readable(text, bigint) from public, anon, authenticated;
 revoke all on function tripp.media_trash_take(int) from public, anon, authenticated;

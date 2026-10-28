@@ -259,8 +259,11 @@ $$;
 -- API: leave a message, with up to 10 encrypted attachments. The admin names
 -- the conversation; anyone else posts to their own. Each attachment must be a
 -- reservation made for this conversation (tripp.uploads), not yet attached,
--- whose uploaded object is exactly the size the ciphertext should be. The
--- body may be empty only if an attachment is present.
+-- whose uploaded object is exactly the size the ciphertext should be, encrypted
+-- in 1 MiB chunks. The body may be empty only if an attachment is present.
+-- The message event carries the body's sha256 and each upload event the
+-- Storage object's eTag, so the chain fixes the content as well as the act.
+-- Events by the admin name the conversation in detail, so a legal hold covers them.
 create or replace function public.m_post(p_token text, p_body text, p_conversation bigint default null, p_attachments jsonb default '[]')
 returns json
 language plpgsql volatile security definer set search_path = ''
@@ -278,6 +281,9 @@ declare
 	v_up bigint;
 	v_size bigint;
 	v_id bigint;
+	v_etags jsonb := '{}'::jsonb;
+	v_etag jsonb;
+	v_conv jsonb;
 	v_visit bigint := tripp.token_visit(p_token);
 begin
 	if v_scope is null then
@@ -318,7 +324,7 @@ begin
 		   or char_length(v_att ->> 'mime') > 255
 		   or char_length(v_att ->> 'name_enc') > 2048
 		   or (v_att ->> 'bytes') !~ '^[0-9]{1,9}$'
-		   or (v_att ->> 'chunk_size') !~ '^[0-9]{1,9}$'
+		   or (v_att ->> 'chunk_size') <> '1048576'
 		   or ((v_att ->> 'duration_ms') is not null and (v_att ->> 'duration_ms') !~ '^[0-9]{1,9}$') then
 			return json_build_object('ok', false, 'error', 'bad_attachment');
 		end if;
@@ -333,11 +339,12 @@ begin
 		if not found or v_up <> v_target then
 			return json_build_object('ok', false, 'error', 'foreign_path');
 		end if;
-		select (o.metadata ->> 'size')::bigint into v_size
+		select (o.metadata ->> 'size')::bigint, o.metadata -> 'eTag' into v_size, v_etag
 		  from storage.objects o where o.bucket_id = 'tripp-media' and o.name = v_path;
 		if not found then
 			return json_build_object('ok', false, 'error', 'missing_upload');
 		end if;
+		v_etags := v_etags || jsonb_build_object(v_path, coalesce(v_etag, 'null'::jsonb));
 		if v_size is distinct from tripp.cipher_size(v_bytes) then
 			return json_build_object('ok', false, 'error', 'size_mismatch');
 		end if;
@@ -346,10 +353,12 @@ begin
 	insert into tripp.messages (conversation_id, author, body)
 	values (v_target, case when v_scope > 0 then 'guest' else 'owner' end, v_body)
 	returning id into v_msg;
+	v_conv := case when v_scope = 0 then jsonb_build_object('conversation', v_target) else '{}'::jsonb end;
 	perform tripp.log_event('message', v_scope, v_visit, v_msg,
 		jsonb_build_object('author', case when v_scope > 0 then 'guest' else 'owner' end,
 		                   'length', char_length(v_body),
-		                   'attachments', v_n));
+		                   'attachments', v_n,
+		                   'sha256', encode(sha256(convert_to(v_body, 'UTF8')), 'hex')) || v_conv);
 
 	for v_att in select value from jsonb_array_elements(v_atts) loop
 		insert into tripp.attachments (message_id, conversation_id, path, kind, mime, bytes,
@@ -360,24 +369,28 @@ begin
 		returning id into v_id;
 		perform tripp.log_event('upload', v_scope, v_visit, v_id,
 			jsonb_build_object('kind', v_att ->> 'kind', 'mime', v_att ->> 'mime',
-			                   'bytes', (v_att ->> 'bytes')::bigint));
+			                   'bytes', (v_att ->> 'bytes')::bigint,
+			                   'etag', v_etags -> (v_att ->> 'path')) || v_conv);
 		delete from tripp.uploads where path = v_att ->> 'path';
 	end loop;
 	return json_build_object('ok', true);
 end;
 $$;
 
--- API: end the session.
+-- API: end the session. An expired session is ended too, and logged with its
+-- real scope (0 for the admin).
 create or replace function public.m_close(p_token text) returns json
 language plpgsql volatile security definer set search_path = ''
 as $$
 declare
-	v_scope bigint := tripp.session_scope(p_token);
-	v_visit bigint := tripp.token_visit(p_token);
+	v_found boolean;
+	v_conversation bigint;
+	v_visit bigint;
 begin
-	delete from tripp.sessions where token_hash = tripp.token_hash(p_token);
-	if found then
-		perform tripp.log_event('logout', v_scope, v_visit, null, null);
+	delete from tripp.sessions where token_hash = tripp.token_hash(p_token)
+	returning true, conversation_id, visit_id into v_found, v_conversation, v_visit;
+	if coalesce(v_found, false) then
+		perform tripp.log_event('logout', coalesce(v_conversation, 0), v_visit, null, null);
 	end if;
 	return json_build_object('ok', true);
 end;
@@ -481,7 +494,8 @@ begin
 			values (v_id, p_wrapped_owner, p_wrapped_guest, p_guest_salt, p_guest_iv, p_guest_iterations);
 		end if;
 		perform tripp.log_event('admin_conv_save', v_scope, tripp.token_visit(p_token), v_id,
-			jsonb_build_object('created', true, 'label_changed', true, 'password_changed', true));
+			jsonb_build_object('created', true, 'label_changed', true, 'password_changed', true,
+			                   'conversation', v_id));
 		return json_build_object('ok', true, 'id', v_id);
 	end if;
 
@@ -514,7 +528,8 @@ begin
 	end if;
 	perform tripp.log_event('admin_conv_save', v_scope, tripp.token_visit(p_token), p_id,
 		jsonb_build_object('created', false, 'label_changed', v_label <> '',
-		                   'password_changed', coalesce(p_password, '') <> ''));
+		                   'password_changed', coalesce(p_password, '') <> '',
+		                   'conversation', p_id));
 	return json_build_object('ok', true, 'id', p_id);
 end;
 $$;
@@ -539,17 +554,19 @@ begin
 		return json_build_object('ok', false, 'error', 'no_conversation');
 	end if;
 	perform tripp.log_event('admin_conv_delete', v_scope, tripp.token_visit(p_token), p_id,
-		jsonb_build_object('messages', v_count));
+		jsonb_build_object('messages', v_count, 'conversation', p_id));
 	return json_build_object('ok', true);
 end;
 $$;
 
 -- API, admin only: hide, unhide, archive, unarchive, or delete one message.
+-- The event names the message's conversation, read before the action.
 create or replace function public.m_msg(p_token text, p_id bigint, p_action text) returns json
 language plpgsql volatile security definer set search_path = ''
 as $$
 declare
 	v_scope bigint := tripp.session_scope(p_token);
+	v_conversation bigint;
 begin
 	if v_scope is null then
 		return json_build_object('ok', false, 'error', 'expired');
@@ -557,6 +574,7 @@ begin
 	if v_scope <> 0 then
 		return json_build_object('ok', false, 'error', 'forbidden');
 	end if;
+	select m.conversation_id into v_conversation from tripp.messages m where m.id = p_id;
 	if p_action = 'delete' then
 		delete from tripp.messages where id = p_id;
 	elsif p_action in ('hide', 'unhide') then
@@ -569,7 +587,8 @@ begin
 	if not found then
 		return json_build_object('ok', false, 'error', 'no_message');
 	end if;
-	perform tripp.log_event('admin_' || p_action, v_scope, tripp.token_visit(p_token), p_id, null);
+	perform tripp.log_event('admin_' || p_action, v_scope, tripp.token_visit(p_token), p_id,
+		jsonb_build_object('conversation', v_conversation));
 	return json_build_object('ok', true);
 end;
 $$;

@@ -34,7 +34,8 @@ declare
 	gA text := 't-ga-' || md5(random()::text);
 	convA bigint; convH bigint;
 	r json;
-	e1 bigint; e2 bigint; e3 bigint; e4 bigint;
+	e1 bigint; e1b bigint; e2 bigint; e2b bigint; e3 bigint; e4 bigint;
+	n bigint;
 	v1 bigint; v2 bigint; v3 bigint;
 	anchor text;
 	old_ts timestamptz := now() - interval '40 days';
@@ -67,7 +68,7 @@ begin
 	assert (r ->> 'ok') = 'true', 'hold set';
 	assert (select legal_hold from tripp.conversations where id = convH), 'legal_hold stored';
 	assert exists (select 1 from tripp.events where type = 'admin_legal_hold' and ref_id = convH
-		and detail = '{"hold": true}'::jsonb), 'hold toggle writes admin_legal_hold';
+		and detail = jsonb_build_object('hold', true, 'conversation', convH)), 'hold toggle writes admin_legal_hold';
 	assert exists (select 1 from json_array_elements(((public.m_convs(adm)) ->> 'conversations')::json) c
 		where (c ->> 'id')::bigint = convH and (c ->> 'legal_hold') = 'true'), 'm_convs returns legal_hold';
 
@@ -95,14 +96,18 @@ begin
 	perform set_config('tripp.purge', 'off', true);
 
 	e1 := tripp.log_event('login', convA, null, null, '{}');
+	-- A non-numeric conversation value must not break the purge.
+	e1b := tripp.log_event('admin_hide', 0, null, null, '{"conversation": "not-a-number"}');
 	e2 := tripp.log_event('message', convA, null, null, '{}');
+	-- An admin event (scope 0) about the held conversation: the hold must cover it.
+	e2b := tripp.log_event('admin_hide', 0, null, null, jsonb_build_object('conversation', convH));
 	e3 := tripp.log_event('message', convH, null, null, '{}');
 	e4 := tripp.log_event('login', convA, null, null, '{}');
 	v1 := tripp.log_visit('ok', convA, '1.1.1.1', 'UA', 'Win', 'Chrome', '{}');
 	v2 := tripp.log_visit('denied', null, '2.2.2.2', 'UA', 'Win', 'Chrome', '{}');
 	v3 := tripp.log_visit('ok', convA, '3.3.3.3', 'UA', 'Win', 'Chrome', '{}');
 	perform set_config('tripp.purge', 'on', true);
-	update tripp.events set at = old_ts where id in (e1, e2, e3);
+	update tripp.events set at = old_ts where id in (e1, e1b, e2, e2b, e3);
 	update tripp.visits set at = old_ts where id in (v1, v2);
 	perform set_config('tripp.purge', 'off', true);
 	perform pg_temp.rehash();
@@ -110,8 +115,35 @@ begin
 	assert (tripp.verify_chain('visits') ->> 'ok') = 'true', 'fixture visits chain valid';
 	select row_hash into anchor from tripp.events where id = e2;
 
+	-- A hold switched on part-way through the purge must not split it: the held
+	-- ids are read once, at the start. This trigger puts convA on hold as soon
+	-- as the messages are deleted.
+	create function pg_temp.hold_mid_purge() returns trigger
+	language plpgsql as $f$
+	begin
+		update tripp.conversations set legal_hold = true where label like 't-ret-a-%' and not legal_hold;
+		return null;
+	end;
+	$f$;
+	create trigger t_hold_mid_purge after delete on tripp.messages
+		for each statement execute function pg_temp.hold_mid_purge();
+
 	r := tripp.retention_purge();
 	assert (r ->> 'ok') = 'true' and (r ->> 'skipped') is null, 'purge ran';
+	drop trigger t_hold_mid_purge on tripp.messages;
+	assert (select legal_hold from tripp.conversations where id = convA), 'hold switched on mid-purge';
+	n := (r ->> 'messages')::bigint;
+	assert n >= 1, 'purge deleted messages';
+
+	-- Message deletes are on the record, and cannot pass for an anchor.
+	assert (select count(*) from tripp.events where type = 'retention_purge' and scope is null
+		and detail ->> 'table' = 'messages' and (detail ->> 'rows')::bigint = n
+		and (detail ->> 'before')::timestamptz = now() - interval '30 days'
+		and not (detail ? 'anchor')) = 1, 'messages purge event recorded';
+	assert not exists (select 1 from tripp.events e where e.type = 'retention_purge' and e.detail ->> 'table' = 'messages'
+		and (tripp.is_anchor('events', e.row_hash) or tripp.is_anchor('visits', e.row_hash)
+		     or tripp.is_anchor('events', e.prev_hash) or tripp.is_anchor('visits', e.prev_hash))),
+		'messages purge event is not an anchor';
 
 	-- Messages.
 	assert not exists (select 1 from tripp.messages where conversation_id = convA and created_at < now() - interval '30 days'),
@@ -122,7 +154,8 @@ begin
 		'new message kept';
 
 	-- Events: prefix up to the held-scope row.
-	assert not exists (select 1 from tripp.events where id in (e1, e2)), 'old events before held row purged';
+	assert not exists (select 1 from tripp.events where id in (e1, e1b, e2)), 'old events before held row purged';
+	assert exists (select 1 from tripp.events where id = e2b), 'admin event about held conversation kept';
 	assert exists (select 1 from tripp.events where id = e3), 'held-scope event kept';
 	assert exists (select 1 from tripp.events where id = e4), 'new event kept';
 	-- Visits: v1, v2 purged, v3 kept.
@@ -131,7 +164,7 @@ begin
 
 	-- Anchors.
 	assert exists (select 1 from tripp.events where type = 'retention_purge' and scope is null
-		and detail ->> 'table' = 'events' and (detail ->> 'rows')::int = 2 and detail ->> 'anchor' = anchor),
+		and detail ->> 'table' = 'events' and (detail ->> 'rows')::int = 3 and detail ->> 'anchor' = anchor),
 		'events anchor matches last purged row hash';
 	assert exists (select 1 from tripp.events where type = 'retention_purge'
 		and detail ->> 'table' = 'visits' and (detail ->> 'rows')::int = 2), 'visits anchor recorded';
@@ -154,10 +187,18 @@ begin
 	-- The purge setting does not leak out of the call.
 	assert coalesce(current_setting('tripp.purge', true), '') <> 'on', 'purge flag reset';
 
+	-- A purge that deletes no messages writes no messages event.
+	n := (select count(*) from tripp.events where type = 'retention_purge' and detail ->> 'table' = 'messages');
+	r := tripp.retention_purge();
+	assert (r ->> 'messages')::bigint = 0, 'second purge deletes no messages';
+	assert (select count(*) from tripp.events where type = 'retention_purge' and detail ->> 'table' = 'messages') = n,
+		'no messages event when nothing was deleted';
+
 	-- Releasing the hold is logged.
 	r := public.m_conv_hold(adm, convH, false);
 	assert (r ->> 'ok') = 'true', 'hold released';
-	assert exists (select 1 from tripp.events where type = 'admin_legal_hold' and detail = '{"hold": false}'::jsonb),
+	assert exists (select 1 from tripp.events where type = 'admin_legal_hold'
+		and detail = jsonb_build_object('hold', false, 'conversation', convH)),
 		'release writes admin_legal_hold';
 end $$;
 

@@ -79,7 +79,7 @@ begin
 	values ('tripp-media', pth, jsonb_build_object('size', 999));
 	r := public.m_post(gA, '', null, att);
 	assert (r ->> 'error') = 'size_mismatch', 'size_mismatch';
-	update storage.objects set metadata = jsonb_build_object('size', tripp.cipher_size(1000))
+	update storage.objects set metadata = jsonb_build_object('size', tripp.cipher_size(1000), 'eTag', '"t-etag-a"')
 	 where bucket_id = 'tripp-media' and name = pth;
 
 	-- foreign_path: reservation for A posted from B; and an unknown path.
@@ -102,6 +102,10 @@ begin
 	assert (r ->> 'error') = 'bad_attachment', 'eleven attachments';
 	r := public.m_post(gA, 'x', null, jsonb_build_array(att -> 0, att -> 0));
 	assert (r ->> 'error') = 'bad_attachment', 'same path twice';
+	r := public.m_post(gA, 'x', null, jsonb_build_array(att -> 0 || '{"chunk_size":65536}'));
+	assert (r ->> 'error') = 'bad_attachment', 'chunk_size must be 1048576';
+	r := public.m_post(gA, 'x', null, jsonb_build_array(att -> 0 || '{"chunk_size":2097152}'));
+	assert (r ->> 'error') = 'bad_attachment', 'larger chunk_size refused';
 
 	-- empty: no body, no attachments.
 	r := public.m_post(gA, '', null, '[]'::jsonb);
@@ -122,6 +126,8 @@ begin
 	assert (select count(*) from tripp.events where id > ev0 and type = 'upload' and ref_id = aid
 	         and detail ->> 'kind' = 'file' and detail ->> 'mime' = 'text/plain'
 	         and (detail ->> 'bytes')::bigint = 1000) = 1, 'upload event';
+	assert (select detail ->> 'etag' from tripp.events where id > ev0 and type = 'upload' and ref_id = aid) = '"t-etag-a"',
+		'upload event carries the Storage eTag';
 
 	-- Already attached: the path is spent.
 	r := public.m_post(gA, 'again', null, att);
@@ -186,6 +192,14 @@ begin
 	r := public.m_post(adm, 'b', convB, jsonb_build_array(jsonb_build_object('path', pthB, 'kind', 'audio',
 		'mime', 'audio/webm', 'bytes', 500, 'name_enc', 'ne', 'nonce', 'nn', 'chunk_size', 1048576)));
 	assert (r ->> 'ok') = 'true', 'admin post with attachment';
+	select e.detail into att from tripp.events e where e.type = 'upload'
+	   and e.ref_id = (select a.id from tripp.attachments a where a.path = pthB);
+	assert att ? 'etag' and att -> 'etag' = 'null'::jsonb, 'upload etag null when Storage has none';
+	assert (att ->> 'conversation')::bigint = convB, 'admin upload event names conversation';
+	assert exists (select 1 from tripp.events e where e.type = 'message' and e.scope = 0
+	   and e.ref_id = (select a.message_id from tripp.attachments a where a.path = pthB)
+	   and (e.detail ->> 'conversation')::bigint = convB
+	   and e.detail ->> 'sha256' = encode(sha256(convert_to('b', 'UTF8')), 'hex')), 'admin message event names conversation';
 	delete from tripp.conversations where id = convB;
 	assert exists (select 1 from tripp.storage_trash where path = pthB), 'conversation delete queues path';
 
@@ -197,6 +211,29 @@ begin
 	perform tripp.media_trash_done(array[pth, pthB]);
 	assert not exists (select 1 from tripp.storage_trash where path in (pth, pthB)), 'trash_done removes';
 	perform tripp.media_trash_done(null);
+
+	-- media_expire_reservations: reservations over a day old go to the trash queue.
+	insert into tripp.uploads (path, conversation_id, kind, bytes, created_at) values
+		('conversation/' || convA || '/t-exp-old', convA, 'file', 1, now() - interval '25 hours'),
+		('conversation/' || convA || '/t-exp-new', convA, 'file', 1, now() - interval '23 hours');
+	n := tripp.media_expire_reservations();
+	assert n >= 1, 'expire returns a count';
+	assert not exists (select 1 from tripp.uploads where path = 'conversation/' || convA || '/t-exp-old'), 'old reservation gone';
+	assert exists (select 1 from tripp.storage_trash where path = 'conversation/' || convA || '/t-exp-old'), 'old reservation queued';
+	assert exists (select 1 from tripp.uploads where path = 'conversation/' || convA || '/t-exp-new'), 'recent reservation kept';
+	assert not exists (select 1 from tripp.storage_trash where path = 'conversation/' || convA || '/t-exp-new'), 'recent reservation not queued';
+	assert not has_function_privilege('anon', 'tripp.media_expire_reservations()', 'execute'), 'anon expire';
+	assert not has_function_privilege('authenticated', 'tripp.media_expire_reservations()', 'execute'), 'authenticated expire';
+
+	-- Volatility: media_readable touches the session, so it must be volatile, and
+	-- no stable or immutable function in tripp or public may call session_scope or write.
+	assert (select provolatile from pg_proc where oid = 'tripp.media_readable(text,bigint)'::regprocedure) = 'v',
+		'media_readable is volatile';
+	assert not exists (
+		select 1 from pg_proc p join pg_namespace ns on ns.oid = p.pronamespace
+		 where ns.nspname in ('tripp', 'public') and p.provolatile in ('s', 'i')
+		   and (p.prosrc ~* 'session_scope\s*\(' or p.prosrc ~* '\m(insert\s+into|update\s+[a-z_.]+\s+set|delete\s+from)\M')),
+		'no stable or immutable function writes';
 
 	-- Lock-down: the internal functions are not callable by the API roles.
 	assert not has_function_privilege('anon', 'tripp.media_reserve(text,bigint,text,bigint)', 'execute'), 'anon reserve';

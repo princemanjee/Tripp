@@ -81,7 +81,7 @@
 			<p id="conv-hint" class="hint">Leave the password empty to keep the current one.</p>
 			<label id="conv-hold-row" class="check-row" hidden>
 				<input id="conv-hold" type="checkbox">
-				<span>Legal hold (nothing in this conversation is deleted by the retention window)</span>
+				<span>Legal hold</span>
 			</label>
 			<p id="conv-status" class="status" role="status" aria-live="polite"></p>
 			<div class="dialog-row">
@@ -108,7 +108,7 @@
 					<button id="admin-key-save" class="button button-primary" type="submit">Save password</button>
 				</span>
 			</div>
-			<label class="dialog-label" for="retention-days">Delete messages and logs older than [ ] days (empty = keep everything)</label>
+			<label class="dialog-label" for="retention-days">Delete after (days)</label>
 			<input id="retention-days" class="field" type="number" min="1" step="1" inputmode="numeric">
 			<p id="retention-status" class="status" role="status" aria-live="polite"></p>
 			<div class="dialog-row">
@@ -129,7 +129,6 @@
 			<div id="key-setup" hidden>
 				<label class="dialog-label" for="key-pass-again">Passphrase again</label>
 				<input id="key-pass-again" class="field" type="password" autocomplete="off">
-				<p class="hint">If this passphrase is lost, every file is lost for good. Nobody can recover it.</p>
 			</div>
 			<p id="key-status" class="status" role="status" aria-live="polite"></p>
 			<div class="dialog-row">
