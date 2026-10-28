@@ -383,6 +383,40 @@ body {
 
 .dialog-row-end { display: flex; gap: 8px; margin-left: auto; }
 
+/* Audit log */
+
+.dialog-wide { width: min(calc(100% - 32px), 1100px); }
+
+.audit-tabs { display: flex; gap: 8px; margin-bottom: 8px; }
+
+.audit-tab[aria-selected="true"] { background: var(--selected); font-weight: 600; }
+
+.audit-scroll {
+	max-height: 60vh;
+	overflow: auto;
+	border: 1px solid var(--line);
+	border-radius: var(--radius);
+}
+
+.audit-table {
+	width: 100%;
+	border-collapse: collapse;
+	font-size: 0.85rem;
+}
+
+.audit-table th,
+.audit-table td {
+	padding: 6px 10px;
+	border-bottom: 1px solid var(--line);
+	text-align: left;
+	vertical-align: top;
+	white-space: nowrap;
+}
+
+.audit-table th { color: var(--muted); font-weight: 600; }
+
+.audit-table td.audit-detail { white-space: normal; min-width: 240px; overflow-wrap: anywhere; }
+
 /* Guest anti-leak */
 
 body.is-blanked #portal { visibility: hidden; }

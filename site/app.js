@@ -29,6 +29,10 @@
 	var pickingFile = false;
 	var pickTimer = null;
 	var PICK_MAX_MS = 60 * 1000;
+	var AUDIT_LIMIT = 100;
+	var auditKind = 'events';
+	var auditOldest = null;
+	var auditSeq = 0;
 
 	var el = {};
 	['lock', 'lock-form', 'lock-password', 'lock-submit', 'portal', 'sidebar',
@@ -39,7 +43,8 @@
 		'conv-hint', 'conv-status', 'conv-delete', 'conv-cancel', 'conv-save', 'admin-key-dialog',
 		'admin-key-form', 'admin-key-new', 'admin-key-again', 'admin-key-status', 'admin-key-cancel',
 		'admin-key-save', 'conv-hold-row', 'conv-hold', 'retention-days', 'retention-status',
-		'retention-save'].forEach(function (id) {
+		'retention-save', 'open-audit', 'audit-dialog', 'audit-tab-events', 'audit-tab-visits',
+		'audit-verified', 'audit-head', 'audit-body', 'audit-status', 'audit-more', 'audit-close'].forEach(function (id) {
 		el[id] = document.getElementById(id);
 	});
 
@@ -55,6 +60,7 @@
 		bad_days: 'Enter a whole number of days, 1 or more, or leave it empty.',
 		mismatch: 'The two password entries do not match. Type them again.',
 		forbidden: 'Only the admin can do that.',
+		bad_kind: 'Something went wrong. Try again.',
 		bad_request: 'Something went wrong. Try again.',
 		server: 'Something went wrong. Try again.',
 		network: 'Could not reach the server. Check your connection and try again.',
@@ -463,7 +469,7 @@
 			if (old) {
 				rpc('m_close', { p_token: old });
 			}
-			['conv-dialog', 'admin-key-dialog'].forEach(function (id) {
+			['conv-dialog', 'admin-key-dialog', 'audit-dialog'].forEach(function (id) {
 				if (el[id].open) {
 					el[id].close();
 				}
@@ -772,6 +778,160 @@
 			}
 		});
 	});
+
+	// ----- Audit log (admin, read only) ---------------------------------------
+
+	var AUDIT_COLUMNS = {
+		events: ['Time', 'Who', 'Type', 'Detail'],
+		visits: ['Time', 'Outcome', 'Who', 'IP', 'ISP', 'Location', 'OS', 'Browser']
+	};
+	var DASH = '—';
+
+	function auditWho(scope) {
+		if (scope === null || scope === undefined) {
+			return DASH;
+		}
+		if (scope === 0) {
+			return 'Admin';
+		}
+		for (var i = 0; i < conversations.length; i += 1) {
+			if (conversations[i].id === scope) {
+				return 'Conversation ' + conversations[i].label;
+			}
+		}
+		return 'Conversation #' + scope;
+	}
+
+	function auditText(value) {
+		return value === null || value === undefined || value === '' ? DASH : String(value);
+	}
+
+	function auditDetail(detail) {
+		if (detail === null || detail === undefined) {
+			return DASH;
+		}
+		if (typeof detail !== 'object') {
+			return String(detail);
+		}
+		var keys = Object.keys(detail);
+		if (!keys.length) {
+			return DASH;
+		}
+		return keys.map(function (key) {
+			var value = detail[key];
+			return key + ': ' + (value !== null && typeof value === 'object' ? JSON.stringify(value) : String(value));
+		}).join(', ');
+	}
+
+	function auditCells(kind, row) {
+		if (kind === 'events') {
+			return [formatTime(row.at), auditWho(row.scope), auditText(row.type), auditDetail(row.detail)];
+		}
+		var place = [row.city, row.region, row.country].filter(function (part) {
+			return part;
+		}).join(', ');
+		return [formatTime(row.at), auditText(row.outcome), auditWho(row.scope), auditText(row.ip),
+			auditText(row.isp), auditText(place), auditText(row.os), auditText(row.browser)];
+	}
+
+	function auditAppend(kind, rows) {
+		rows.forEach(function (row) {
+			var tr = document.createElement('tr');
+			auditCells(kind, row).forEach(function (text, index) {
+				var td = document.createElement('td');
+				td.textContent = text;
+				if (kind === 'events' && index === 3) {
+					td.className = 'audit-detail';
+				}
+				tr.appendChild(td);
+			});
+			el['audit-body'].appendChild(tr);
+			if (auditOldest === null || row.id < auditOldest) {
+				auditOldest = row.id;
+			}
+		});
+	}
+
+	function auditSetBadge(verified) {
+		var node = el['audit-verified'];
+		node.classList.remove('is-error');
+		if (verified.ok) {
+			node.textContent = 'Record intact: ' + verified.rows + ' rows verified';
+		} else if (verified.first_bad_id !== null && verified.first_bad_id !== undefined) {
+			node.textContent = 'Record altered at entry #' + verified.first_bad_id;
+			node.classList.add('is-error');
+		} else {
+			node.textContent = 'Record check failed';
+			node.classList.add('is-error');
+		}
+	}
+
+	// Loads the first page of a table, or the next older page.
+	function auditLoad(kind, older) {
+		var seq = auditSeq + 1;
+		auditSeq = seq;
+		el['audit-more'].disabled = true;
+		setNote(el['audit-status'], 'Loading');
+		if (!older) {
+			auditKind = kind;
+			auditOldest = null;
+			el['audit-body'].textContent = '';
+			el['audit-head'].textContent = '';
+			el['audit-verified'].textContent = '';
+			el['audit-more'].hidden = true;
+			var hr = document.createElement('tr');
+			AUDIT_COLUMNS[kind].forEach(function (name) {
+				var th = document.createElement('th');
+				th.scope = 'col';
+				th.textContent = name;
+				hr.appendChild(th);
+			});
+			el['audit-head'].appendChild(hr);
+			el['audit-tab-events'].setAttribute('aria-selected', String(kind === 'events'));
+			el['audit-tab-visits'].setAttribute('aria-selected', String(kind === 'visits'));
+		}
+		return rpc('m_audit', {
+			p_token: token,
+			p_kind: kind,
+			p_before: older ? auditOldest : null,
+			p_limit: AUDIT_LIMIT
+		}).then(function (result) {
+			if (seq !== auditSeq || !token) {
+				return;
+			}
+			if (!result.ok) {
+				if (result.error === 'expired') {
+					lock();
+					return;
+				}
+				setStatus(el['audit-status'], result.error || 'network');
+				el['audit-more'].disabled = false;
+				el['audit-more'].hidden = !older;
+				return;
+			}
+			setNote(el['audit-status'], '');
+			var rows = Array.isArray(result.rows) ? result.rows : [];
+			if (!older) {
+				auditSetBadge(result.verified || { ok: false });
+				if (!rows.length) {
+					setNote(el['audit-status'], 'No entries.');
+				}
+			}
+			auditAppend(kind, rows);
+			el['audit-more'].disabled = false;
+			el['audit-more'].hidden = rows.length < AUDIT_LIMIT;
+		});
+	}
+
+	el['open-audit'].addEventListener('click', function () {
+		el['audit-dialog'].showModal();
+		auditLoad('events', false);
+	});
+
+	el['audit-tab-events'].addEventListener('click', function () { auditLoad('events', false); });
+	el['audit-tab-visits'].addEventListener('click', function () { auditLoad('visits', false); });
+	el['audit-more'].addEventListener('click', function () { auditLoad(auditKind, true); });
+	el['audit-close'].addEventListener('click', function () { el['audit-dialog'].close(); });
 
 	// ----- Idle and visibility ------------------------------------------------
 

@@ -28,6 +28,7 @@
 			<ul id="conv-list" class="conv-list"></ul>
 			<footer class="sidebar-foot">
 				<button id="open-admin-key" class="button button-quiet" type="button">Settings</button>
+				<button id="open-audit" class="button button-quiet" type="button">Audit log</button>
 				<button id="lock-now-side" class="button button-quiet" type="button">Lock</button>
 			</footer>
 		</aside>
@@ -111,6 +112,28 @@
 				</span>
 			</div>
 		</form>
+	</dialog>
+
+	<dialog id="audit-dialog" class="dialog dialog-wide">
+		<h2 class="dialog-title">Audit log</h2>
+		<div class="audit-tabs" role="tablist">
+			<button id="audit-tab-events" class="button button-quiet audit-tab" type="button" role="tab" aria-selected="true">Events</button>
+			<button id="audit-tab-visits" class="button button-quiet audit-tab" type="button" role="tab" aria-selected="false">Visits</button>
+		</div>
+		<p id="audit-verified" class="status" role="status" aria-live="polite"></p>
+		<div class="audit-scroll">
+			<table class="audit-table">
+				<thead id="audit-head"></thead>
+				<tbody id="audit-body"></tbody>
+			</table>
+		</div>
+		<p id="audit-status" class="status" role="status" aria-live="polite"></p>
+		<div class="dialog-row">
+			<button id="audit-more" class="button button-quiet" type="button" hidden>Load older</button>
+			<span class="dialog-row-end">
+				<button id="audit-close" class="button button-quiet" type="button">Close</button>
+			</span>
+		</div>
 	</dialog>
 
 	<script src="config.js"></script>
