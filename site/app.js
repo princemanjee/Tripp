@@ -588,16 +588,24 @@
 		}
 	}
 
+	// The prompt is gone. A guest who left the page meanwhile is locked now.
+	function mediaSettled() {
+		endAskingMedia();
+		if (isGuest() && (document.hidden || !document.hasFocus())) {
+			awayLock();
+		}
+	}
+
 	function askMedia(constraints) {
 		if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
 			return Promise.reject(new Error('media'));
 		}
 		beginAskingMedia();
 		return navigator.mediaDevices.getUserMedia(constraints).then(function (stream) {
-			endAskingMedia();
+			mediaSettled();
 			return stream;
 		}, function (e) {
-			endAskingMedia();
+			mediaSettled();
 			throw e;
 		});
 	}
@@ -717,7 +725,9 @@
 					}
 				}, CALL_END_MS);
 			}
+			resetIdle();
 		} else {
+			clearTimeout(idleTimer);
 			closeDialog('call-incoming');
 			openCallPanel(session);
 			setNote(el['call-status'], CALL_TEXT[state] || '');
@@ -735,6 +745,7 @@
 			return;
 		}
 		activeCall = session;
+		clearTimeout(idleTimer);
 		updateCallButtons();
 		session.placeCall();
 	}
@@ -769,6 +780,7 @@
 			activeCall = session;
 			incomingRing = payload;
 			session.handle(payload);
+			clearTimeout(idleTimer);
 			updateCallButtons();
 			return;
 		}
@@ -1121,9 +1133,10 @@
 
 	// ----- Session -------------------------------------------------------------
 
+	// The idle lock is paused while a call is in progress and restarts when it ends.
 	function resetIdle() {
 		clearTimeout(idleTimer);
-		if (token) {
+		if (token && !(activeCall && !activeCall.ended)) {
 			idleTimer = setTimeout(function () { lock(); }, IDLE_MS);
 		}
 	}

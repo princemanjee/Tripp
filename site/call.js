@@ -169,6 +169,7 @@
 		this.callId = null;
 		this.isCaller = false;
 		this.accepted = false;
+		this.acceptSent = false;
 		this.peer = null;
 		this.state = 'idle';
 		this.pc = null;
@@ -289,6 +290,16 @@
 		return pc;
 	};
 
+	// createPc, but a failure to build the connection ends the call as `failed`.
+	CallSession.prototype.safePc = function () {
+		try {
+			return this.createPc();
+		} catch (e) {
+			this.hangUp('failed');
+			return null;
+		}
+	};
+
 	CallSession.prototype.flushIce = function () {
 		var self = this;
 		var list = self.pendingIce;
@@ -337,6 +348,7 @@
 				return;
 			}
 			self.send('accept');
+			self.acceptSent = true;
 		}, function () {
 			self.send('decline');
 			self.finish('media', { broadcast: false, quiet: false });
@@ -379,7 +391,10 @@
 			self.send('taken', { by: self.peer });
 			self.setState('connecting');
 			self.arm(CONNECT_MS, function () { self.hangUp('failed'); });
-			var pc = self.createPc();
+			var pc = self.safePc();
+			if (!pc) {
+				return;
+			}
 			pc.createOffer().then(function (offer) {
 				return pc.setLocalDescription(offer);
 			}).then(function () {
@@ -397,7 +412,10 @@
 			if (self.isCaller || !self.accepted || self.pc || msg.from !== self.peer || typeof msg.sdp !== 'string') {
 				return;
 			}
-			var answerPc = self.createPc();
+			var answerPc = self.safePc();
+			if (!answerPc) {
+				return;
+			}
 			answerPc.setRemoteDescription({ type: 'offer', sdp: msg.sdp }).then(function () {
 				self.flushIce();
 				return answerPc.createAnswer();
@@ -480,8 +498,13 @@
 		self.ended = true;
 		clearTimeout(self.timer);
 		clearTimeout(self.discTimer);
-		if (o.broadcast && self.callId && (self.isCaller || self.accepted)) {
-			self.send('end', { reason: reason });
+		if (o.broadcast && self.callId) {
+			if (self.isCaller || self.acceptSent) {
+				self.send('end', { reason: reason });
+			} else if (self.state === 'ringing' || self.accepted) {
+				// A callee whose accept never went out tells the caller it is not answering.
+				self.send('decline');
+			}
 		}
 		if (self.localStream) {
 			self.localStream.getTracks().forEach(function (t) { try { t.stop(); } catch (e) {} });
