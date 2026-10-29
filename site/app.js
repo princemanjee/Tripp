@@ -612,6 +612,7 @@
 	}
 
 	function newCall(id, kind) {
+		callEpoch += 1;
 		var channel = convChannels.get(id);
 		if (!channel || !window.TrippCall || !window.TrippLive) {
 			return null;
@@ -700,6 +701,7 @@
 				}
 			}
 		} else if (state === 'ended') {
+			callEpoch += 1;
 			activeCall = null;
 			incomingRing = null;
 			closeDialog('call-incoming');
@@ -751,6 +753,50 @@
 		session.placeCall();
 	}
 
+	// A ring from a peer whose presence role is not known yet is parked for up to
+	// 5 s and run through onCallMessage again on the channel's next presence sync or
+	// join. A call starting or ending locally in the meantime drops it. The role
+	// is never taken from the payload.
+	var PARK_MS = 5000;
+	var parkedRings = {};            // conversation id -> { payload, epoch, timer }
+	var callEpoch = 0;               // changes whenever a call session starts or ends
+
+	function dropParked(conversationId) {
+		var entry = parkedRings[conversationId];
+		if (entry) {
+			clearTimeout(entry.timer);
+			delete parkedRings[conversationId];
+		}
+	}
+
+	function parkRing(conversationId, payload) {
+		dropParked(conversationId);
+		parkedRings[conversationId] = {
+			payload: payload,
+			epoch: callEpoch,
+			timer: setTimeout(function () { dropParked(conversationId); }, PARK_MS)
+		};
+	}
+
+	function reevaluateParked() {
+		Object.keys(parkedRings).forEach(function (cid) {
+			var entry = parkedRings[cid];
+			if (!entry) {
+				return;
+			}
+			if (entry.epoch !== callEpoch) {
+				dropParked(cid);
+				return;
+			}
+			var channel = convChannels.get(Number(cid));
+			if (!channel || presenceRole(channel, entry.payload.from) === null) {
+				return;
+			}
+			dropParked(cid);
+			onCallMessage(Number(cid), entry.payload);
+		});
+	}
+
 	// Receives every `call` broadcast on a conversation channel.
 	function onCallMessage(conversationId, payload) {
 		if (!token || !window.TrippCall || !window.TrippLive || !payload || typeof payload !== 'object' ||
@@ -762,6 +808,11 @@
 			return;
 		}
 		var me = { peerId: window.TrippLive.peerId, role: role };
+		if (payload.t === 'ring' && payload.from !== me.peerId && presenceRole(channel, payload.from) === null) {
+			// The sender's presence has not synced yet. Park the ring (one per channel).
+			parkRing(conversationId, payload);
+			return;
+		}
 		if (!window.TrippCall.shouldHandle(payload, me, presenceRole(channel, payload.from))) {
 			return;
 		}
@@ -872,7 +923,9 @@
 			if (liveOn === lr) {
 				renderDots();
 			}
+			reevaluateParked();
 		});
+		channel.on('presence', { event: 'join' }, function () { reevaluateParked(); });
 		return channel;
 	}
 
@@ -1185,6 +1238,7 @@
 	}
 
 	function lock() {
+		Object.keys(parkedRings).forEach(dropParked);
 		var old = token;
 		token = null;
 		role = null;

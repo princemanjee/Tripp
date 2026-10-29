@@ -3,6 +3,10 @@
 // Run (site/ served on http://localhost:8000, for example `python -m http.server 8000` inside site/):
 //   TRIPP_DB_PASSWORD=... node tests/e2e/calls.mjs
 //
+// Rate limit: every page signs in anonymously, about 15 sign-ins per full run. Supabase allows
+// roughly one per 2 minutes on average (HTTP 429 beyond that), so wait about 30 minutes between
+// full runs. The database connection skips certificate checks, as scripts/sql.mjs does.
+//
 // Seven scenarios, each checked in both UIs and against the tripp.events rows of the call.
 // The admin signs in with a temporary tripp.sessions row (the `open` Edge Function is
 // intercepted for the admin page only). Guests sign in through the real `open` for a
@@ -29,7 +33,8 @@ await db.connect();
 
 const PASS = 'e2e-calls-' + randomBytes(6).toString('hex');
 const adminTokens = [];
-let convId = null, browser = null, startedAt, origSeen, pre;
+const myUids = new Set();   // auth users made by this run's own pages; only these are deleted
+let convId = null, browser = null, origSeen, pre;
 const consoleLines = [];
 const results = [];
 let currentName = '';
@@ -139,8 +144,18 @@ async function newGuest(name = 'guest') {
   await page.waitForSelector('#portal:not([hidden])', { timeout: 10000 });
   return { ctx, page, name };
 }
+// Records the anonymous auth users behind this run's own sessions (T's guest sessions and the
+// admin tokens above), through their live_bindings rows.
+async function collectUids() {
+  const hashes = (await db.query('select token_hash from tripp.sessions where conversation_id = $1', [convId])).rows.map((r) => r.token_hash);
+  const rows = (await db.query(
+    'select uid from tripp.live_bindings where token_hash = any($1::text[]) or token_hash = any(select tripp.token_hash(t) from unnest($2::text[]) t)',
+    [hashes, adminTokens])).rows;
+  rows.forEach((r) => myUids.add(r.uid));
+}
 async function callButtonsReady(...peers) {
   for (const p of peers) await p.page.locator('#call-audio').waitFor({ state: 'visible', timeout: 20000 });
+  await collectUids();
 }
 // Ends whatever is still going on a page, so the audit record has no dangling call_start.
 async function settle(p) {
@@ -170,6 +185,7 @@ async function scenario(name, fn) {
       try { log('    state ' + p.name + ': status=' + JSON.stringify(await p.page.evaluate(pStatus)) + ' panel=' + (await p.page.evaluate(pPanel)) + ' incoming=' + (await p.page.evaluate(pIncoming)) + ' pcs=' + JSON.stringify(await p.page.evaluate(pPcStates))); } catch (e2) { /* ignore */ }
     }
   } finally {
+    try { await collectUids(); } catch (e) { /* ignore */ }
     for (const p of open) await settle(p);
     await sleep(1500);
     for (const p of open) { try { await p.ctx.close(); } catch (e) { /* ignore */ } }
@@ -177,7 +193,6 @@ async function scenario(name, fn) {
 }
 
 try {
-  startedAt = (await db.query('select now() as n')).rows[0].n;
   pre = {
     ev: await maxEvent(),
     vi: Number((await db.query('select coalesce(max(id),0) m from tripp.visits')).rows[0].m),
@@ -194,7 +209,7 @@ try {
     await callButtonsReady(a, g);
     await g.page.click('#call-audio');
     await poll(a.page, pIncoming, null, 15000, 'admin incoming dialog');
-    check('admin sees the incoming dialog', true, await a.page.evaluate(() => document.getElementById('call-incoming-text').textContent));
+    check('admin sees the incoming dialog "T is calling"', (await a.page.evaluate(() => document.getElementById('call-incoming-text').textContent)) === 'T is calling');
     check('guest shows Calling', (await g.page.evaluate(pStatus)) === 'Calling', await g.page.evaluate(pStatus));
     await a.page.click('#call-answer');
     await poll(a.page, pConnected, null, 20000, 'admin connected');
@@ -202,9 +217,8 @@ try {
     check('both sides connected, panels open', (await a.page.evaluate(pPanel)) && (await g.page.evaluate(pPanel)));
     await sleep(3000);
     await a.page.click('#call-hangup');
-    await poll(g.page, endedText, null, 10000, 'guest Call ended');
-    check('guest UI shows Call ended', true);
-    check('admin UI shows Call ended or panel already closed', (await a.page.evaluate(pStatus)) === 'Call ended' || !(await a.page.evaluate(pPanel)));
+    check('guest UI shows Call ended', (await poll(g.page, endedText, null, 10000, 'guest Call ended')) === 'Call ended');
+    check('admin UI shows Call ended', (await poll(a.page, endedText, null, 5000, 'admin Call ended')) === 'Call ended');
     const rows = await rowsWhen(before, (r) => ofType(r, 'call_end').length >= 2);
     show(rows);
     const start = ofType(rows, 'call_start'), ans = ofType(rows, 'call_answer'), ends = ofType(rows, 'call_end');
@@ -226,8 +240,7 @@ try {
     await poll(g.page, pIncoming, null, 15000, 'guest incoming dialog');
     check('guest sees Incoming call', (await g.page.evaluate(() => document.getElementById('call-incoming-text').textContent)) === 'Incoming call');
     await g.page.click('#call-decline');
-    await poll(a.page, endedText, null, 10000, 'admin call ended');
-    check('admin UI shows Call ended', (await a.page.evaluate(pStatus)) === 'Call ended' || !(await a.page.evaluate(pPanel)));
+    check('admin UI shows Call ended', (await poll(a.page, endedText, null, 10000, 'admin call ended')) === 'Call ended');
     check('guest incoming dialog closed', !(await g.page.evaluate(pIncoming)));
     await rowsWhen(before, (r) => ofType(r, 'call_end').length >= 1);
     await sleep(1500);
@@ -251,7 +264,7 @@ try {
     const secs = Math.round((Date.now() - t0) / 1000);
     check('admin UI shows No answer after about 45 s', txt === 'No answer' && secs >= 40 && secs <= 55, txt + ' after ' + secs + ' s');
     await poll(g.page, () => !document.getElementById('call-incoming').open, null, 10000, 'guest dialog closed');
-    check('guest incoming dialog closed', true);
+    check('guest incoming dialog closed', !(await g.page.evaluate(pIncoming)));
     const rows = await rowsWhen(before, (r) => ofType(r, 'call_end').length >= 1);
     show(rows);
     const ends = ofType(rows, 'call_end');
@@ -273,8 +286,8 @@ try {
     const t0 = Date.now();
     await g.page.evaluate(() => window.dispatchEvent(new Event('blur')));
     check('guest is locked', await g.page.evaluate(pLocked));
-    await poll(a.page, endedText, null, 10000, 'admin Call ended');
-    check('admin UI shows Call ended within 10 s', true, (Date.now() - t0) + ' ms');
+    const at4 = await poll(a.page, endedText, null, 10000, 'admin Call ended');
+    check('admin UI shows Call ended within 10 s', at4 === 'Call ended' && Date.now() - t0 < 10000, (Date.now() - t0) + ' ms');
     const tracks = await g.page.evaluate(pTracks);
     check('every guest track has readyState ended', tracks.length > 0 && tracks.every((s) => s === 'ended'), tracks);
     check('guest peer connection closed', (await g.page.evaluate(pPcStates)).every((s) => s === 'closed'));
@@ -304,7 +317,7 @@ try {
     check('blank cleared once focus is back', !(await g.page.evaluate(pBlanked)));
     await poll(a.page, pConnected, null, 25000, 'admin connected');
     await poll(g.page, pConnected, null, 25000, 'guest connected');
-    check('call proceeds and connects on both sides', true);
+    check('call proceeds and connects on both sides', (await a.page.evaluate(pConnected)) && (await g.page.evaluate(pConnected)));
     check('guest still not locked', !(await g.page.evaluate(pLocked)));
     check('guest tracks live', (await g.page.evaluate(pTracks)).every((s) => s === 'live'));
     await a.page.click('#call-hangup');
@@ -323,11 +336,12 @@ try {
     await a.page.click('#call-audio');
     await poll(g1.page, pIncoming, null, 15000, 'tab 1 incoming');
     await poll(g2.page, pIncoming, null, 15000, 'tab 2 incoming');
-    check('both tabs ring', true);
+    const rt = async (p) => p.page.evaluate(() => document.getElementById('call-incoming-text').textContent);
+    check('both tabs show Incoming call', (await rt(g1)) === 'Incoming call' && (await rt(g2)) === 'Incoming call');
     await g1.page.click('#call-answer');
     const t0 = Date.now();
     await poll(g2.page, () => !document.getElementById('call-incoming').open, null, 3000, 'tab 2 stops ringing');
-    check('tab 2 stops ringing within 3 s', true, (Date.now() - t0) + ' ms');
+    check('tab 2 stops ringing within 3 s', !(await g2.page.evaluate(pIncoming)) && Date.now() - t0 < 3000, (Date.now() - t0) + ' ms');
     await poll(a.page, pConnected, null, 20000, 'admin connected');
     await poll(g1.page, pConnected, null, 20000, 'tab 1 connected');
     check('admin and tab 1 connected, tab 2 idle', !(await g2.page.evaluate(pPanel)) && (await g2.page.evaluate(() => window.__pcs.length)) === 0);
@@ -357,6 +371,7 @@ try {
       if (ofType(rows, 'call_start').length >= 2) break;
       log('  attempt ' + attempt + ' did not cross (starts: ' + ofType(rows, 'call_start').length + '), retrying');
       await settle(a); await settle(g); await sleep(2500);
+      for (const p of [a, g]) { try { await p.ctx.close(); } catch (e) { /* ignore */ } open.splice(open.indexOf(p), 1); }
     }
     check('both rings crossed (two call_start rows)', ofType(rows, 'call_start').length === 2, 'attempt ' + attempt);
     await poll(a.page, pConnected, null, 20000, 'admin connected');
@@ -409,7 +424,7 @@ try {
       await db.query('delete from tripp.sessions where conversation_id = $1', [convId]);
       await db.query('delete from tripp.conversations where id = $1', [convId]);
     }
-    const u = (await db.query('select id from auth.users where is_anonymous and created_at > $1', [startedAt])).rows.map((r) => r.id);
+    const u = [...myUids];   // never a created-at window: real guests may sign in while this runs
     if (u.length) {
       await db.query('delete from tripp.live_bindings where uid = any($1::uuid[])', [u]);
       await db.query('delete from auth.users where id = any($1::uuid[])', [u]);
