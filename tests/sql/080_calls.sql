@@ -9,6 +9,7 @@ declare
 	c1 uuid := gen_random_uuid();
 	c2 uuid := gen_random_uuid();
 	c3 uuid := gen_random_uuid();
+	c4 uuid := gen_random_uuid();
 	e tripp.events;
 	n0 bigint; n1 bigint;
 	m realtime.messages;
@@ -71,8 +72,7 @@ begin
 	-- End without an answer.
 	r := public.m_call(gst, null, c3, 'end', '{"reason":"missed","relay":"unknown"}');
 	select * into e from tripp.events where id = (r ->> 'event')::bigint;
-	assert e.detail -> 'duration_s' is null or jsonb_typeof(e.detail -> 'duration_s') = 'null', 'no answer gives null duration';
-	assert not (e.detail ? 'duration_s') or e.detail -> 'duration_s' = 'null'::jsonb, 'duration_s null';
+	assert e.detail ? 'duration_s' and jsonb_typeof(e.detail -> 'duration_s') = 'null', 'no answer gives null duration';
 
 	-- Bad input.
 	r := public.m_call(gst, null, c3, 'end', '{"reason":"nope","relay":"host"}');
@@ -91,6 +91,37 @@ begin
 	assert (r ->> 'error') = 'bad_input', 'null action';
 	r := public.m_call(gst, null, null, 'answer', '{}');
 	assert (r ->> 'error') = 'bad_input', 'null call';
+
+	-- Another conversation's answer with the same call id does not count.
+	r := public.m_call(adm, conv2, c4, 'answer');
+	assert (r ->> 'ok') = 'true', 'B answers c4';
+	r := public.m_call(adm, conv, c4, 'end', '{"reason":"hangup","relay":"host"}');
+	select * into e from tripp.events where id = (r ->> 'event')::bigint;
+	assert e.detail ? 'duration_s' and jsonb_typeof(e.detail -> 'duration_s') = 'null', 'foreign answer ignored';
+	r := public.m_call(adm, conv, c4, 'answer');
+	r := public.m_call(adm, conv, c4, 'end', '{"reason":"hangup","relay":"host"}');
+	select * into e from tripp.events where id = (r ->> 'event')::bigint;
+	assert jsonb_typeof(e.detail -> 'duration_s') = 'number', 'own answer counts';
+
+	-- Non-object detail and wrong types.
+	r := public.m_call(gst, null, c3, 'start', '5'::jsonb);
+	assert (r ->> 'error') = 'bad_input', 'number detail start';
+	r := public.m_call(gst, null, c3, 'start', '[]'::jsonb);
+	assert (r ->> 'error') = 'bad_input', 'array detail start';
+	r := public.m_call(gst, null, c3, 'start', null);
+	assert (r ->> 'error') = 'bad_input', 'null detail start';
+	r := public.m_call(gst, null, c3, 'end', '5'::jsonb);
+	assert (r ->> 'error') = 'bad_input', 'number detail end';
+	r := public.m_call(gst, null, c3, 'end', '[]'::jsonb);
+	assert (r ->> 'error') = 'bad_input', 'array detail end';
+	r := public.m_call(gst, null, c3, 'end', null);
+	assert (r ->> 'error') = 'bad_input', 'null detail end';
+	r := public.m_call(gst, null, c3, 'start', '{"kind":5}');
+	assert (r ->> 'error') = 'bad_input', 'numeric kind';
+	r := public.m_call(gst, null, c3, 'end', '{"reason":5,"relay":"host"}');
+	assert (r ->> 'error') = 'bad_input', 'numeric reason';
+	r := public.m_call(gst, null, c3, 'end', '{"reason":"hangup","relay":5}');
+	assert (r ->> 'error') = 'bad_input', 'numeric relay';
 
 	-- Expired.
 	r := public.m_call('nope', null, c3, 'answer', '{}');

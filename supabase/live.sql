@@ -202,6 +202,7 @@ begin
 		end if;
 		select e.at into v_ans from tripp.events e
 		 where e.type = 'call_answer' and e.detail ->> 'call' = p_call::text
+		   and e.detail -> 'conversation' = to_jsonb(v_conv)
 		 order by e.id limit 1;
 		if v_ans is not null then
 			v_dur := greatest(0, floor(extract(epoch from clock_timestamp() - v_ans)))::bigint;
