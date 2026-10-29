@@ -588,10 +588,11 @@
 		}
 	}
 
-	// The prompt is gone. A guest who left the page meanwhile is locked now.
+	// The prompt is gone. A guest whose page is hidden now is locked. Focus alone
+	// is not checked: the permission bubble itself can take focus.
 	function mediaSettled() {
 		endAskingMedia();
-		if (isGuest() && (document.hidden || !document.hasFocus())) {
+		if (isGuest() && document.hidden) {
 			awayLock();
 		}
 	}
