@@ -77,7 +77,9 @@
 		'audit-verified', 'audit-head', 'audit-body', 'audit-status', 'audit-more', 'audit-close',
 		'attach', 'attach-input', 'attach-list', 'files-key', 'key-backup', 'key-dialog', 'key-form',
 		'key-dialog-title', 'key-pass', 'key-setup', 'key-pass-again', 'key-status', 'key-cancel',
-		'key-save', 'desktop-alerts', 'toasts', 'pane-online'].forEach(function (id) {
+		'key-save', 'desktop-alerts', 'toasts', 'pane-online', 'call-audio', 'call-video', 'call-incoming',
+		'call-incoming-text', 'call-answer', 'call-decline', 'call-panel', 'remote-video', 'local-video',
+		'call-status', 'call-mute', 'call-camera', 'call-hangup'].forEach(function (id) {
 		el[id] = document.getElementById(id);
 	});
 
@@ -218,6 +220,7 @@
 			el['toggle-archived'].textContent = 'Archived (' + conv.archived_count + ')';
 		}
 		updateFiles();
+		updateCallButtons();
 	}
 
 	// ----- Conversation list (admin) ------------------------------------------
@@ -510,8 +513,325 @@
 		return hasRole(convChannels.get(id), 'guest');
 	}
 
-	// Hook for call signalling; filled in by the calls task.
-	function onCallMessage(conversationId, payload) {}
+	// ----- Calls -----------------------------------------------------------------
+
+	var activeCall = null;           // the one CallSession, or null
+	var incomingRing = null;         // the ring shown in the incoming dialog
+	var askingMedia = false;         // true while the browser asks for the microphone or camera
+	var mediaTimer = null;
+	var callEndTimer = null;
+	var CALL_END_MS = 2000;
+	var CALL_TEXT = { calling: 'Calling', connecting: 'Connecting', connected: '' };
+	var CALL_END_TEXT = {
+		hangup: 'Call ended', lock: 'Call ended', declined: 'Call ended',
+		missed: 'No answer', failed: 'Call failed', media: 'Microphone or camera blocked.'
+	};
+
+	function presenceRole(channel, key) {
+		try {
+			var metas = channel.presenceState()[key] || [];
+			for (var i = 0; i < metas.length; i += 1) {
+				if (metas[i] && metas[i].role) {
+					return metas[i].role;
+				}
+			}
+		} catch (e) {}
+		return null;
+	}
+
+	function peersWithRole(channel, wanted) {
+		try {
+			var state = channel.presenceState();
+			return Object.keys(state).filter(function (key) {
+				return (state[key] || []).some(function (meta) { return meta && meta.role === wanted; });
+			});
+		} catch (e) {
+			return [];
+		}
+	}
+
+	function callConversation() {
+		return role === 'admin' ? current : liveScope;
+	}
+
+	// Call buttons show only while the other side is online and no call is active.
+	function updateCallButtons() {
+		var id = callConversation();
+		var channel = id === null || id === undefined ? null : convChannels.get(id);
+		var show = Boolean(token) && !activeCall && Boolean(window.TrippCall) && Boolean(channel) &&
+			liveOn !== null && liveOn === liveReady &&
+			(role === 'admin' ? isOnline(id) : hasRole(channel, 'admin'));
+		el['call-audio'].hidden = !show;
+		el['call-video'].hidden = !show;
+	}
+
+	// While the permission prompt is up, a guest's page is blanked instead of
+	// locked, with the same fallback as the file picker.
+	function beginAskingMedia() {
+		askingMedia = true;
+		clearTimeout(mediaTimer);
+		mediaTimer = setTimeout(function () {
+			var hidden = document.hidden;
+			endAskingMedia();
+			if (hidden && isGuest()) {
+				awayLock();
+			}
+		}, PICK_MAX_MS);
+	}
+
+	function endAskingMedia() {
+		askingMedia = false;
+		clearTimeout(mediaTimer);
+		mediaTimer = null;
+		if (!pickingFile) {
+			document.body.classList.remove('is-blanked');
+		}
+	}
+
+	function askMedia(constraints) {
+		if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+			return Promise.reject(new Error('media'));
+		}
+		beginAskingMedia();
+		return navigator.mediaDevices.getUserMedia(constraints).then(function (stream) {
+			endAskingMedia();
+			return stream;
+		}, function (e) {
+			endAskingMedia();
+			throw e;
+		});
+	}
+
+	function newCall(id, kind) {
+		var channel = convChannels.get(id);
+		if (!channel || !window.TrippCall || !window.TrippLive) {
+			return null;
+		}
+		var t = token;
+		var r = role;
+		var other = r === 'admin' ? 'guest' : 'admin';
+		var session = new window.TrippCall.CallSession({
+			channel: channel,
+			conversationId: id,
+			kind: kind,
+			role: r,
+			peerId: window.TrippLive.peerId,
+			onState: function (state, info) { onCallState(session, state, info); },
+			onStreams: function (local, remote) {
+				if (activeCall === session) {
+					showStreams(local, remote);
+				}
+			},
+			log: function (action, callId, detail) {
+				return rpc('m_call', {
+					p_token: t, p_conversation: r === 'admin' ? id : null,
+					p_call: callId, p_action: action, p_detail: detail
+				});
+			},
+			peers: function () { return peersWithRole(channel, other); },
+			getMedia: askMedia
+		});
+		return session;
+	}
+
+	function showStreams(local, remote) {
+		if (el['local-video'].srcObject !== (local || null)) {
+			el['local-video'].srcObject = local || null;
+		}
+		if (el['remote-video'].srcObject !== (remote || null)) {
+			el['remote-video'].srcObject = remote || null;
+		}
+	}
+
+	function openCallPanel(session) {
+		clearTimeout(callEndTimer);
+		callEndTimer = null;
+		var audio = session.kind !== 'video';
+		el['call-panel'].classList.toggle('is-audio', audio);
+		el['call-camera'].hidden = audio;
+		el['call-mute'].disabled = false;
+		el['call-camera'].disabled = false;
+		el['call-hangup'].disabled = false;
+		if (!el['call-panel'].open) {
+			el['call-mute'].textContent = 'Mute';
+			el['call-camera'].textContent = 'Camera off';
+			el['call-panel'].showModal();
+		}
+	}
+
+	function closeDialog(id) {
+		if (el[id].open) {
+			el[id].close();
+		}
+	}
+
+	function resetCallUi() {
+		incomingRing = null;
+		clearTimeout(callEndTimer);
+		callEndTimer = null;
+		closeDialog('call-incoming');
+		closeDialog('call-panel');
+		showStreams(null, null);
+		setNote(el['call-status'], '');
+		el['call-audio'].hidden = true;
+		el['call-video'].hidden = true;
+	}
+
+	function onCallState(session, state, info) {
+		if (session !== activeCall) {
+			return;
+		}
+		if (state === 'ringing') {
+			if (!session.glare) {
+				el['call-incoming-text'].textContent = role === 'admin'
+					? (convLabel(session.conversationId) || '') + ' is calling'
+					: 'Incoming call';
+				if (!el['call-incoming'].open) {
+					el['call-incoming'].showModal();
+				}
+			}
+		} else if (state === 'ended') {
+			activeCall = null;
+			incomingRing = null;
+			closeDialog('call-incoming');
+			showStreams(null, null);
+			var quiet = info.quiet || (!session.isCaller && !session.accepted);
+			if (quiet || !el['call-panel'].open) {
+				closeDialog('call-panel');
+			} else {
+				var text = CALL_END_TEXT[info.reason] || 'Call ended';
+				if (info.reason === 'media') {
+					el['call-status'].textContent = text;
+					el['call-status'].classList.add('is-error');
+				} else {
+					setNote(el['call-status'], text);
+				}
+				el['call-mute'].disabled = true;
+				el['call-camera'].disabled = true;
+				el['call-hangup'].disabled = true;
+				clearTimeout(callEndTimer);
+				callEndTimer = setTimeout(function () {
+					callEndTimer = null;
+					if (!activeCall) {
+						closeDialog('call-panel');
+					}
+				}, CALL_END_MS);
+			}
+		} else {
+			closeDialog('call-incoming');
+			openCallPanel(session);
+			setNote(el['call-status'], CALL_TEXT[state] || '');
+			showStreams(session.localStream, session.remoteStream);
+		}
+		updateCallButtons();
+	}
+
+	function startCall(kind) {
+		if (activeCall || !token) {
+			return;
+		}
+		var session = newCall(callConversation(), kind);
+		if (!session) {
+			return;
+		}
+		activeCall = session;
+		updateCallButtons();
+		session.placeCall();
+	}
+
+	// Receives every `call` broadcast on a conversation channel.
+	function onCallMessage(conversationId, payload) {
+		if (!token || !window.TrippCall || !window.TrippLive || !payload || typeof payload !== 'object' ||
+			typeof payload.t !== 'string' || typeof payload.call !== 'string' || typeof payload.from !== 'string') {
+			return;
+		}
+		var channel = convChannels.get(conversationId);
+		if (!channel) {
+			return;
+		}
+		var me = { peerId: window.TrippLive.peerId, role: role };
+		if (!window.TrippCall.shouldHandle(payload, me, presenceRole(channel, payload.from))) {
+			return;
+		}
+		if (activeCall && activeCall.conversationId === conversationId && activeCall.callId === payload.call) {
+			activeCall.handle(payload);
+			return;
+		}
+		if (payload.t !== 'ring') {
+			return;
+		}
+		var session;
+		if (!activeCall) {
+			session = newCall(conversationId, payload.kind);
+			if (!session) {
+				return;
+			}
+			activeCall = session;
+			incomingRing = payload;
+			session.handle(payload);
+			updateCallButtons();
+			return;
+		}
+		if (activeCall.isCaller && activeCall.state === 'calling' && activeCall.conversationId === conversationId) {
+			// Both sides rang at once. The winner keeps ringing; the loser answers it.
+			if (window.TrippCall.glareWinner(activeCall.callId, payload.call) === 'mine') {
+				return;
+			}
+			var mine = activeCall;
+			activeCall = null;
+			mine.abandon();
+			session = newCall(conversationId, payload.kind);
+			if (!session) {
+				resetCallUi();
+				updateCallButtons();
+				return;
+			}
+			session.glare = true;
+			activeCall = session;
+			incomingRing = payload;
+			session.handle(payload);
+			session.acceptIncoming(payload);
+			return;
+		}
+		// One call at a time.
+		try {
+			var sent = channel.send({ type: 'broadcast', event: 'call', payload: { t: 'decline', call: payload.call, from: me.peerId } });
+			if (sent && sent.catch) {
+				sent.catch(function () {});
+			}
+		} catch (e) {}
+	}
+
+	el['call-audio'].addEventListener('click', function () { startCall('audio'); });
+	el['call-video'].addEventListener('click', function () { startCall('video'); });
+	el['call-answer'].addEventListener('click', function () {
+		if (activeCall && incomingRing) {
+			activeCall.acceptIncoming(incomingRing);
+		}
+	});
+	el['call-decline'].addEventListener('click', function () {
+		if (activeCall && incomingRing) {
+			activeCall.decline(incomingRing);
+		}
+	});
+	el['call-hangup'].addEventListener('click', function () {
+		if (activeCall) {
+			activeCall.hangUp('hangup');
+		}
+	});
+	el['call-mute'].addEventListener('click', function () {
+		if (activeCall) {
+			el['call-mute'].textContent = activeCall.toggleMute() ? 'Unmute' : 'Mute';
+		}
+	});
+	el['call-camera'].addEventListener('click', function () {
+		if (activeCall) {
+			el['call-camera'].textContent = activeCall.toggleCamera() ? 'Camera on' : 'Camera off';
+		}
+	});
+	['call-incoming', 'call-panel'].forEach(function (id) {
+		el[id].addEventListener('cancel', function (event) { event.preventDefault(); });
+	});
 
 	function renderDots() {
 		if (role === 'admin') {
@@ -524,6 +844,7 @@
 		} else {
 			el['pane-online'].hidden = !hasRole(convChannels.get(liveScope), 'admin');
 		}
+		updateCallButtons();
 	}
 
 	// Opens a private channel and tracks our presence once joined.
@@ -577,6 +898,11 @@
 				liveScope = scope;
 				var channel = openChannel('conv:' + scope, 'guest', lr);
 				if (channel) {
+					channel.on('broadcast', { event: 'call' }, function (message) {
+						if (liveOn === lr) {
+							onCallMessage(scope, message && message.payload);
+						}
+					});
 					convChannels.set(scope, channel);
 					joinChannel(channel, 'guest', lr);
 				}
@@ -857,6 +1183,18 @@
 		// Hide first so a failure in the cleanup below can never leave the portal showing.
 		el['portal'].hidden = true;
 		el['lock'].hidden = false;
+		// End any call while its channel is still open, so `end` can reach the other side.
+		var callDone = null;
+		try {
+			if (activeCall) {
+				var call = activeCall;
+				activeCall = null;
+				callDone = call.hangUp('lock');
+			}
+		} catch (e) {}
+		try {
+			resetCallUi();
+		} catch (e) {}
 		// Live teardown has its own guards so a failure there cannot skip the cleanup below.
 		try {
 			liveReset();
@@ -876,7 +1214,13 @@
 			clearTimeout(idleTimer);
 			clearTimeout(pendingTimer);
 			if (old) {
-				rpc('m_close', { p_token: old });
+				// After the call's `end` is logged (best effort, never more than 3 s).
+				Promise.race([
+					Promise.resolve(callDone),
+					new Promise(function (resolve) { setTimeout(resolve, 3000); })
+				]).catch(function () {}).then(function () {
+					rpc('m_close', { p_token: old });
+				});
 			}
 			['conv-dialog', 'admin-key-dialog', 'audit-dialog', 'key-dialog'].forEach(function (id) {
 				if (el[id].open) {
@@ -906,6 +1250,7 @@
 			el['lock-password'].focus();
 		} finally {
 			clearPicking();
+			endAskingMedia();
 			document.body.classList.remove('is-blanked', 'is-guest');
 		}
 	}
@@ -1936,18 +2281,18 @@
 	}
 
 	window.addEventListener('blur', function () {
-		if (isGuest() && !pickingFile) {
+		if (isGuest() && !pickingFile && !askingMedia) {
 			awayLock();
 		}
 	});
 
-	// While a file picker is open a hidden page is blanked but not locked
-	// (phones hide the page for the native picker).
+	// While a file picker or the media permission prompt is open a hidden page is
+	// blanked but not locked (phones hide the page for the native picker).
 	document.addEventListener('visibilitychange', function () {
 		if (!isGuest() || !document.hidden) {
 			return;
 		}
-		if (pickingFile) {
+		if (pickingFile || askingMedia) {
 			document.body.classList.add('is-blanked');
 		} else {
 			awayLock();

@@ -26,6 +26,7 @@ is a sign-in through `open` plus the events it caused.
 | --- | --- | --- | --- |
 | Task 4 | 301 | 823, 824 | user agent contains `HeadlessChrome`, temporary conversation |
 | Task 5 | 328, 329 | 897, 898, 899, 900 | user agent contains `HeadlessChrome`, temporary conversation T (897 and 328 from a first run that stopped early; 898 login, 899 message, 900 logout from the passing run) |
+| Task 7 | 439, 440, 441 | 1238 to 1259 | user agent contains `HeadlessChrome`, temporary conversations T (337, 338, 339). Run 1 (visit 439): 1238 login; video call 1239 start, 1240 answer, 1241 and 1242 end; audio call declined 1243 start, 1244 end; 1245 start and 1246 answer of a third call that has no `call_end`, because the run stopped there and the browser was closed. Run 2 (visit 440): 1247 login, 1248 start, 1249 answer, 1250 end, 1251 end with reason `lock`, 1252 logout. Run 3 (visit 441, both sides calling at once): 1253 login, 1254 and 1255 start, 1256 end of the dropped call, 1257 answer, 1258 and 1259 end. Admin events here have scope 0 and no visit, from an inserted session row |
 
 ## Test admin events with no visit
 

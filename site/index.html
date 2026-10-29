@@ -45,6 +45,8 @@
 					<span id="sync" class="sync" role="status" aria-live="polite"></span>
 				</div>
 				<span class="bar-actions">
+					<button id="call-audio" class="button button-quiet" type="button" hidden>Call</button>
+					<button id="call-video" class="button button-quiet" type="button" hidden>Video call</button>
 					<button id="toggle-archived" class="button button-quiet" type="button" hidden>Archived</button>
 					<button id="conv-settings" class="button button-quiet" type="button" hidden>Settings</button>
 					<button id="lock-now" class="button button-quiet" type="button">Lock</button>
@@ -167,10 +169,37 @@
 		</div>
 	</dialog>
 
+	<dialog id="call-incoming" class="dialog">
+		<p id="call-incoming-text" class="dialog-title"></p>
+		<div class="dialog-row">
+			<span></span>
+			<span class="dialog-row-end">
+				<button id="call-decline" class="button button-danger" type="button">Decline</button>
+				<button id="call-answer" class="button button-primary" type="button">Answer</button>
+			</span>
+		</div>
+	</dialog>
+
+	<dialog id="call-panel" class="dialog dialog-call">
+		<div class="call-media">
+			<video id="remote-video" class="call-remote" autoplay playsinline></video>
+			<video id="local-video" class="call-local" autoplay playsinline muted></video>
+		</div>
+		<p id="call-status" class="status" role="status" aria-live="polite"></p>
+		<div class="dialog-row">
+			<span class="dialog-row-end">
+				<button id="call-mute" class="button button-quiet" type="button">Mute</button>
+				<button id="call-camera" class="button button-quiet" type="button" hidden>Camera off</button>
+				<button id="call-hangup" class="button button-danger" type="button">Hang up</button>
+			</span>
+		</div>
+	</dialog>
+
 	<script src="config.js"></script>
 	<script src="crypto.js"></script>
 	<script src="vendor/supabase-2.117.3.js"></script>
 	<script src="live.js"></script>
+	<script src="call.js"></script>
 	<script src="app.js"></script>
 </body>
 </html>
