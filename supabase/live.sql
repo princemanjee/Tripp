@@ -192,6 +192,20 @@ begin
 		v_ev := v_ev || jsonb_build_object('kind', v_d ->> 'kind');
 		v_id := tripp.log_event('call_start', v_scope, v_visit, null, v_ev);
 	elsif p_action = 'answer' then
+		-- Only the other party may answer, only a call that was started in this
+		-- conversation, and only once per call id, so the duration is measured
+		-- from the one real answer. log_event's lock, taken early, makes concurrent
+		-- answers queue behind each other's insert.
+		perform pg_advisory_xact_lock(hashtext('tripp.events'));
+		if not exists (select 1 from tripp.events e
+		                where e.type = 'call_start' and e.detail ->> 'call' = p_call::text
+		                  and e.detail -> 'conversation' = to_jsonb(v_conv)
+		                  and e.scope is distinct from v_scope)
+		   or exists (select 1 from tripp.events e
+		               where e.type = 'call_answer' and e.detail ->> 'call' = p_call::text
+		                 and e.detail -> 'conversation' = to_jsonb(v_conv)) then
+			return json_build_object('ok', false, 'error', 'bad_input');
+		end if;
 		v_id := tripp.log_event('call_answer', v_scope, v_visit, null, v_ev);
 	elsif p_action = 'end' then
 		if jsonb_typeof(v_d -> 'reason') is distinct from 'string'

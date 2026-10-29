@@ -687,9 +687,56 @@
 		el['call-video'].hidden = true;
 	}
 
+	// Keeps the screen on during a call where the browser supports it, so a phone
+	// does not sleep, hide the page and end the call. Errors are ignored.
+	var wakeLock = null;             // the WakeLockSentinel, or the pending request
+
+	function holdWake() {
+		if (wakeLock || document.hidden || !navigator.wakeLock || typeof navigator.wakeLock.request !== 'function') {
+			return;
+		}
+		try {
+			var req = navigator.wakeLock.request('screen');
+			wakeLock = req;
+			Promise.resolve(req).then(function (sentinel) {
+				if (wakeLock !== req || !sentinel) {
+					if (sentinel && sentinel.release) {
+						sentinel.release().catch(function () {});
+					}
+					return;
+				}
+				wakeLock = sentinel;
+				sentinel.addEventListener('release', function () {
+					if (wakeLock === sentinel) {
+						wakeLock = null;
+					}
+				});
+			}, function () {
+				if (wakeLock === req) {
+					wakeLock = null;
+				}
+			});
+		} catch (e) {
+			wakeLock = null;
+		}
+	}
+
+	function releaseWake() {
+		var w = wakeLock;
+		wakeLock = null;
+		if (w && typeof w.release === 'function') {
+			try { w.release().catch(function () {}); } catch (e) {}
+		}
+	}
+
 	function onCallState(session, state, info) {
 		if (session !== activeCall) {
 			return;
+		}
+		if (state === 'ended') {
+			releaseWake();
+		} else {
+			holdWake();
 		}
 		if (state === 'ringing') {
 			if (!session.glare) {
@@ -808,6 +855,13 @@
 			return;
 		}
 		var me = { peerId: window.TrippLive.peerId, role: role };
+		var parked = parkedRings[conversationId];
+		if (parked && parked.payload.call === payload.call && parked.payload.from === payload.from &&
+			(payload.t === 'end' || payload.t === 'taken' || payload.t === 'decline')) {
+			// The caller gave up (or another endpoint answered) while the ring was parked.
+			dropParked(conversationId);
+			return;
+		}
 		if (payload.t === 'ring' && payload.from !== me.peerId && presenceRole(channel, payload.from) === null) {
 			// The sender's presence has not synced yet. Park the ring (one per channel).
 			parkRing(conversationId, payload);
@@ -846,6 +900,7 @@
 			mine.abandon();
 			session = newCall(conversationId, payload.kind);
 			if (!session) {
+				releaseWake();
 				resetCallUi();
 				updateCallButtons();
 				return;
@@ -987,6 +1042,7 @@
 		convChannels.forEach(function (channel, id) {
 			if (!wanted[id]) {
 				convChannels.delete(id);
+				dropParked(id);
 				try { channel.unsubscribe(); } catch (e) {}
 			}
 		});
@@ -1166,6 +1222,10 @@
 	});
 
 	function liveReset() {
+		clearTimeout(liveRetryTimer);
+		liveRetryTimer = null;
+		liveTries = 0;
+		Object.keys(parkedRings).forEach(dropParked);
 		liveReady = null;
 		liveOn = null;
 		liveScope = null;
@@ -1195,6 +1255,44 @@
 		}
 	}
 
+	// Starts live access. A failed start (for example a rate-limited sign-in) is
+	// retried after 5 s, 15 s, 60 s, then every 5 min, while the same session
+	// stays unlocked. Only one retry is ever pending; lock() cancels it.
+	var LIVE_RETRY_MS = [5000, 15000, 60000, 300000];
+	var liveRetryTimer = null;
+	var liveTries = 0;
+
+	function beginLive() {
+		clearTimeout(liveRetryTimer);
+		liveRetryTimer = null;
+		var t = token;
+		var failed = false;
+		var lr;
+		try {
+			lr = window.TrippLive
+				? window.TrippLive.start(t).then(function (r) { return r.scope; }).catch(function () { failed = true; return null; })
+				: Promise.resolve(null);
+		} catch (e) {
+			failed = true;
+			lr = Promise.resolve(null);
+		}
+		liveReady = lr;
+		startLive();
+		lr.then(function () {
+			if (!failed || liveReady !== lr || t !== token || liveRetryTimer) {
+				return;
+			}
+			var wait = LIVE_RETRY_MS[Math.min(liveTries, LIVE_RETRY_MS.length - 1)];
+			liveTries += 1;
+			liveRetryTimer = setTimeout(function () {
+				liveRetryTimer = null;
+				if (t === token && liveReady === lr) {
+					beginLive();
+				}
+			}, wait);
+		});
+	}
+
 	function unlock(result) {
 		token = result.token;
 		role = result.role === 'admin' ? 'admin' : 'guest';
@@ -1210,19 +1308,15 @@
 		el['sync'].textContent = 'Loading';
 		document.title = 'Notes';
 		layout();
-		try {
-			liveReady = window.TrippLive
-				? window.TrippLive.start(token).then(function (r) { return r.scope; }).catch(function () { return null; })
-				: Promise.resolve(null);
-		} catch (e) {
-			liveReady = Promise.resolve(null);
-		}
-		startLive();
+		liveTries = 0;
+		beginLive();
 		refresh().then(function () {
 			el['thread'].scrollTop = el['thread'].scrollHeight;
 		});
+		// During a call the poll runs even while hidden, so the session cannot idle
+		// out on the server and the call's `end` is always logged.
 		pollTimer = setInterval(function () {
-			if (!document.hidden) {
+			if (!document.hidden || (activeCall && !activeCall.ended)) {
 				refresh();
 			}
 		}, POLL_MS);
@@ -1261,6 +1355,7 @@
 			}
 		} catch (e) {}
 		try {
+			releaseWake();
 			resetCallUi();
 		} catch (e) {}
 		// Live teardown has its own guards so a failure there cannot skip the cleanup below.
@@ -2333,6 +2428,10 @@
 	document.addEventListener('visibilitychange', function () {
 		if (!document.hidden && token) {
 			refresh();
+		}
+		// The browser drops the wake lock when the page hides; take it again on return.
+		if (!document.hidden && activeCall && !activeCall.ended) {
+			holdWake();
 		}
 	});
 

@@ -55,3 +55,42 @@ test('iceConfig takes the servers from config', () => {
 		globalThis.APP_CONFIG = prev;
 	}
 });
+
+function fakeSession(sent, logs) {
+	const channel = { send: (m) => { sent.push(m.payload); return Promise.resolve(); } };
+	return new T.CallSession({
+		channel,
+		conversationId: 1,
+		kind: 'audio',
+		role: 'admin',
+		peerId: 'me',
+		log: (action, callId, detail) => { logs.push({ action, callId, detail }); return Promise.resolve(); }
+	});
+}
+
+test('glare loser broadcasts end for its losing call and logs end with relay unknown', async () => {
+	const sent = [];
+	const logs = [];
+	const s = fakeSession(sent, logs);
+	s.isCaller = true;
+	s.callId = 'X';
+	s.state = 'calling';
+	s.logged = true;
+	await s.abandon();
+	assert.equal(s.ended, true);
+	assert.deepEqual(sent, [{ t: 'end', call: 'X', from: 'me', reason: 'hangup' }]);
+	assert.deepEqual(logs, [{ action: 'end', callId: 'X', detail: { reason: 'hangup', relay: 'unknown' } }]);
+});
+
+test('an active call ignores an end for a different call id', () => {
+	const s = fakeSession([], []);
+	s.isCaller = true;
+	s.callId = 'Y';
+	s.state = 'calling';
+	s.peer = 'g';
+	s.handle({ t: 'end', call: 'X', from: 'g', reason: 'hangup' });
+	assert.equal(s.ended, false);
+	assert.equal(s.state, 'calling');
+	s.handle({ t: 'end', call: 'Y', from: 'g', reason: 'hangup' });
+	assert.equal(s.ended, true);
+});

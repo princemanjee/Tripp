@@ -515,7 +515,9 @@ body {
 
 /* Guest anti-leak */
 
-body.is-blanked #portal { visibility: hidden; }
+body.is-blanked #portal,
+body.is-blanked #call-incoming,
+body.is-blanked #call-panel { visibility: hidden; }
 
 body.is-guest #portal { user-select: none; -webkit-user-select: none; }
 body.is-guest #portal textarea { user-select: text; -webkit-user-select: text; }

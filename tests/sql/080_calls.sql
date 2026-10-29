@@ -10,6 +10,8 @@ declare
 	c2 uuid := gen_random_uuid();
 	c3 uuid := gen_random_uuid();
 	c4 uuid := gen_random_uuid();
+	c5 uuid := gen_random_uuid();
+	c6 uuid := gen_random_uuid();
 	e tripp.events;
 	n0 bigint; n1 bigint;
 	m realtime.messages;
@@ -37,7 +39,7 @@ begin
 	assert m.topic = 'admin' and m.payload ->> 'type' = 'call_start', 'alert is call_start';
 
 	-- Own conversation id is fine; another is forbidden.
-	r := public.m_call(gst, conv, c1, 'answer', '{}');
+	r := public.m_call(gst, conv, c5, 'start', '{"kind":"audio"}');
 	assert (r ->> 'ok') = 'true', 'guest may name own conversation';
 	r := public.m_call(gst, conv2, c1, 'start', '{"kind":"audio"}');
 	assert (r ->> 'error') = 'forbidden', 'guest other conversation forbidden';
@@ -52,8 +54,10 @@ begin
 	select * into e from tripp.events where id = (r ->> 'event')::bigint;
 	assert e.scope = 0 and (e.detail ->> 'conversation')::bigint = conv, 'admin scope 0 with conversation';
 
-	-- Answer then end.
+	-- Answer then end. The caller's own side may not answer its call.
 	r := public.m_call(adm, conv, c2, 'answer');
+	assert (r ->> 'error') = 'bad_input', 'caller side cannot answer';
+	r := public.m_call(gst, null, c2, 'answer');
 	assert (r ->> 'ok') = 'true', 'answer ok';
 	select * into e from tripp.events where id = (r ->> 'event')::bigint;
 	assert e.type = 'call_answer', 'answer event type';
@@ -92,16 +96,27 @@ begin
 	r := public.m_call(gst, null, null, 'answer', '{}');
 	assert (r ->> 'error') = 'bad_input', 'null call';
 
-	-- Another conversation's answer with the same call id does not count.
+	-- An answer needs a start with the same call id in the same conversation.
+	r := public.m_call(adm, conv, c6, 'answer');
+	assert (r ->> 'error') = 'bad_input', 'answer without start';
+	r := public.m_call(gst, null, c4, 'start', '{"kind":"audio"}');
+	assert (r ->> 'ok') = 'true', 'guest starts c4';
 	r := public.m_call(adm, conv2, c4, 'answer');
-	assert (r ->> 'ok') = 'true', 'B answers c4';
+	assert (r ->> 'error') = 'bad_input', 'answer in another conversation refused';
 	r := public.m_call(adm, conv, c4, 'end', '{"reason":"hangup","relay":"host"}');
 	select * into e from tripp.events where id = (r ->> 'event')::bigint;
-	assert e.detail ? 'duration_s' and jsonb_typeof(e.detail -> 'duration_s') = 'null', 'foreign answer ignored';
+	assert e.detail ? 'duration_s' and jsonb_typeof(e.detail -> 'duration_s') = 'null', 'no accepted answer, null duration';
 	r := public.m_call(adm, conv, c4, 'answer');
+	assert (r ->> 'ok') = 'true', 'other party answers c4';
+	-- Only once per call id; the duration comes from the one accepted answer.
+	r := public.m_call(adm, conv, c4, 'answer');
+	assert (r ->> 'error') = 'bad_input', 'second answer refused';
+	r := public.m_call(gst, null, c4, 'answer');
+	assert (r ->> 'error') = 'bad_input', 'caller side answer refused';
+	assert (select count(*) from tripp.events where type = 'call_answer' and detail ->> 'call' = c4::text) = 1, 'one answer for c4';
 	r := public.m_call(adm, conv, c4, 'end', '{"reason":"hangup","relay":"host"}');
 	select * into e from tripp.events where id = (r ->> 'event')::bigint;
-	assert jsonb_typeof(e.detail -> 'duration_s') = 'number', 'own answer counts';
+	assert jsonb_typeof(e.detail -> 'duration_s') = 'number', 'accepted answer counts';
 
 	-- Non-object detail and wrong types.
 	r := public.m_call(gst, null, c3, 'start', '5'::jsonb);

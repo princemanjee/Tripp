@@ -484,10 +484,12 @@
 		return this.finish(reason || 'hangup', { broadcast: true, quiet: false });
 	};
 
-	// Glare loser: drop our own call without an `end` broadcast; it logged `start`,
-	// so it logs `end` with reason `hangup` and relay `unknown`.
+	// Glare loser: drop our own call and broadcast `end` for it, so endpoints on the
+	// winner's side still ringing for it stop (the winner's own call has another id
+	// and ignores it). It logged `start`, so it logs `end` with reason `hangup` and
+	// relay `unknown`.
 	CallSession.prototype.abandon = function () {
-		return this.finish('hangup', { broadcast: false, quiet: true, relay: 'unknown' });
+		return this.finish('hangup', { broadcast: true, quiet: true, relay: 'unknown' });
 	};
 
 	CallSession.prototype.finish = function (reason, o) {
