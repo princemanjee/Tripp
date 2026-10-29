@@ -14,6 +14,8 @@
 
 	// The session token lives in memory only, so closing or reloading the tab locks the portal.
 	var token = null;
+	// Resolves to the live scope (0 for admin, else a conversation id), or null when live is unavailable.
+	var liveReady = null;
 	var role = null;                 // 'admin' or 'guest'
 	var conversations = [];          // admin only
 	var current = null;              // admin only: the open conversation id
@@ -481,6 +483,7 @@
 		el['sync'].textContent = 'Loading';
 		document.title = 'Notes';
 		layout();
+		liveReady = window.TrippLive.start(token).then(function (r) { return r.scope; }).catch(function () { return null; });
 		refresh().then(function () {
 			el['thread'].scrollTop = el['thread'].scrollHeight;
 		});
@@ -512,6 +515,8 @@
 		el['portal'].hidden = true;
 		el['lock'].hidden = false;
 		try {
+			liveReady = null;
+			window.TrippLive.stop();
 			watermark = null;
 			conversations = [];
 			current = null;
