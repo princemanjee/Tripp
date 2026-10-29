@@ -14,14 +14,13 @@ declare
 	maxid bigint;
 	id1 bigint;
 begin
-	insert into tripp.admin_key (id, hash) values (1, extensions.crypt('t-admin', extensions.gen_salt('bf', 4)))
-	on conflict (id) do update set hash = excluded.hash;
 	insert into tripp.conversations (label, hash)
 	values ('t-conv', extensions.crypt(g, extensions.gen_salt('bf', 4))) returning id into conv;
 	insert into tripp.conversations (label, hash)
 	values ('t-conv2', extensions.crypt(g2, extensions.gen_salt('bf', 4))) returning id into conv2;
 	delete from tripp.attempts where ip = '198.51.100.9';
-	adm := tripp.open_session('t-admin', '198.51.100.9', 'UA', 'Windows', 'Edge', '{}') ->> 'token';
+	adm := 't-admin-token-' || md5(random()::text);
+	insert into tripp.sessions (token_hash, conversation_id) values (tripp.token_hash(adm), null);
 	gst := tripp.open_session(g, '198.51.100.9', 'UA', 'Mac', 'Safari', '{}') ->> 'token';
 
 	-- No user.
@@ -52,6 +51,8 @@ begin
 	assert not tripp_live.live_topic_ok('conv:'), 'conv: denied';
 	assert not tripp_live.live_topic_ok('conv:1:2'), 'conv:1:2 denied';
 	assert not tripp_live.live_topic_ok(null), 'null topic denied';
+	assert not tripp_live.live_topic_ok('conv:0' || conv), 'guest conv:0<n> denied';
+	assert not tripp_live.live_topic_ok(' conv:' || conv), 'guest leading space denied';
 	reset role;
 
 	-- Rebinding the same uid upserts.
@@ -67,6 +68,8 @@ begin
 	assert tripp_live.live_topic_ok('admin'), 'admin topic allowed';
 	assert tripp_live.live_topic_ok('conv:' || conv), 'admin sees existing conversation';
 	assert not tripp_live.live_topic_ok('conv:' || (maxid + 1000)), 'admin denied unknown conversation';
+	assert not tripp_live.live_topic_ok('conv:0' || conv), 'admin conv:0<n> denied';
+	assert not tripp_live.live_topic_ok(' conv:' || conv), 'admin leading space denied';
 	reset role;
 
 	-- Stale session; live_scope does not touch last_seen.
@@ -121,6 +124,8 @@ begin
 	assert (r ->> 'seen')::bigint = 5, 'm_audit returns seen on first page';
 	r := public.m_audit(adm, 'events', 999999999, 1);
 	assert (r -> 'seen') is null, 'm_audit omits seen on later pages';
+
+	delete from tripp.sessions where token_hash = tripp.token_hash(adm);
 
 	-- Grants and RLS.
 	assert has_function_privilege('authenticated', 'public.m_live_bind(text)', 'execute'), 'authenticated can bind';

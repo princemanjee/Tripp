@@ -55,7 +55,7 @@ begin
 		if p_topic = 'admin' then
 			return true;
 		end if;
-		if p_topic ~ '^conv:[0-9]{1,18}$' then
+		if p_topic ~ '^conv:[1-9][0-9]{0,17}$' then
 			return exists (select 1 from tripp.conversations c
 			                where c.id = substr(p_topic, 6)::bigint);
 		end if;
