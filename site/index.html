@@ -5,7 +5,7 @@
 	<meta name="viewport" content="width=device-width, initial-scale=1">
 	<meta name="robots" content="noindex, nofollow, noarchive">
 	<meta name="referrer" content="no-referrer">
-	<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src https://*.supabase.co; img-src blob:; media-src blob:; base-uri 'none'; form-action 'none'">
+	<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src https://*.supabase.co wss://ohhkzjsdabdimlrgnagw.supabase.co; img-src blob:; media-src blob:; base-uri 'none'; form-action 'none'">
 	<title>Sign in</title>
 	<link rel="stylesheet" href="styles.css">
 </head>
@@ -165,6 +165,8 @@
 
 	<script src="config.js"></script>
 	<script src="crypto.js"></script>
+	<script src="vendor/supabase-2.117.3.js"></script>
+	<script src="live.js"></script>
 	<script src="app.js"></script>
 </body>
 </html>

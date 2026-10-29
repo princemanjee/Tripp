@@ -5,9 +5,12 @@
   "scripts": {
     "test:sql": "node scripts/sql.mjs test",
     "test:js": "node --test \"tests/js/*.test.mjs\"",
-    "db:apply": "node scripts/sql.mjs apply"
+    "db:apply": "node scripts/sql.mjs apply",
+    "test:live": "node --test \"tests/live/*.test.mjs\""
   },
   "devDependencies": {
-    "pg": "8.13.1"
+    "@supabase/supabase-js": "2.117.3",
+    "pg": "8.13.1",
+    "playwright": "1.48.2"
   }
 }
