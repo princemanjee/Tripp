@@ -91,6 +91,7 @@ before(async () => {
 });
 
 after(async () => {
+  if (!db) return;
   for (const c of clients) { try { await c.removeAllChannels(); } catch {} }
   try {
     if (uids.length) {
@@ -141,8 +142,8 @@ test('guest broadcast on conv:A reaches the admin', async () => {
 
 test('guest send to admin is not delivered', async () => {
   const ch = priv(G, 'admin');
-  // Not subscribed (denied), so this takes the REST path with private: true.
-  try { await ch.send({ type: 'broadcast', event: 'call', payload: { n: 'evil' } }); } catch {}
+  // Not subscribed (denied), so this is the explicit REST path.
+  try { await ch.httpSend('call', { n: 'evil' }); } catch {}
   await sleep(3000);
   assert.ok(!adminGot.some((m) => m.payload?.n === 'evil'), 'admin received a guest send');
   await G.removeChannel(ch);
@@ -177,7 +178,10 @@ test('public channels never receive private traffic', async () => {
   console.log('public subscribe statuses: ' + statuses.join(', '));
 
   // Positive control: a public sender reaches a public listener, so the listeners work.
-  if (statuses[2].endsWith('SUBSCRIBED') && statuses[0].endsWith('SUBSCRIBED')) {
+  const st = statuses.map((x) => x.split('=')[1]);
+  for (const s of st) assert.ok(s === 'CHANNEL_ERROR' || s === 'SUBSCRIBED', 'unexpected public status ' + s);
+  if (st.includes('SUBSCRIBED')) {
+    assert.ok(st[0] === 'SUBSCRIBED' && st[2] === 'SUBSCRIBED', 'a public subscribe succeeded but the control cannot run');
     await chs[2][0].send({ type: 'broadcast', event: 'ctl', payload: { n: 'ctl' } });
     assert.ok(await waitFor(() => got.G2conv.some((m) => m.event === 'ctl'), 5000), 'control: public listener hears public send');
   }
