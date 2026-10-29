@@ -203,6 +203,40 @@ body {
 
 .conv-item.is-selected { background: var(--selected); font-weight: 600; }
 
+.conv-line { display: flex; align-items: center; gap: 8px; min-width: 0; }
+
+.conv-item.is-unread .conv-name { font-weight: 700; }
+
+.online-dot {
+	flex: none;
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	background: var(--accent);
+}
+
+.online-dot[hidden] { display: none; }
+
+.toasts {
+	position: fixed;
+	right: 16px;
+	bottom: 16px;
+	z-index: 20;
+	display: grid;
+	gap: 8px;
+	max-width: calc(100vw - 32px);
+	pointer-events: none;
+}
+
+.toast {
+	padding: 10px 14px;
+	border: 1px solid var(--line);
+	border-radius: var(--radius);
+	background: var(--surface);
+	color: var(--ink);
+	font-size: 0.9rem;
+}
+
 .conv-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .conv-meta { color: var(--muted); font-size: 0.8rem; font-weight: 400; }

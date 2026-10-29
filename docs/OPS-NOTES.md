@@ -17,6 +17,16 @@ No other visit has os or browser `other` or `HeadlessChrome` in its user agent.
 Not test sign-ins: 49 and 73 (the owner, Chrome). Visits 99, 100, 101 and 106
 are admin sign-ins from regular Chrome 156 on Windows and are not listed above.
 
+## Test sign-ins during the Stage 2-3 build
+
+Made by the build's own headless tests on 2026-10-28, not by a person. Each row
+is a sign-in through `open` plus the events it caused.
+
+| Task | Visit ids | Event ids | How to tell |
+| --- | --- | --- | --- |
+| Task 4 | 301 | 823, 824 | user agent contains `HeadlessChrome`, temporary conversation |
+| Task 5 | 328, 329 | 897, 898, 899, 900 | user agent contains `HeadlessChrome`, temporary conversation T (897 and 328 from a first run that stopped early; 898 login, 899 message, 900 logout from the passing run) |
+
 ## Test admin events with no visit
 
 From Task 8 on, admin-path tests used a session row inserted directly, with no

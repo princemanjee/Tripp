@@ -16,6 +16,23 @@
 	var token = null;
 	// Resolves to the live scope (0 for admin, else a conversation id), or null when live is unavailable.
 	var liveReady = null;
+	// Live channels. Admin: one per listed conversation plus 'admin'. Guest: just its own.
+	var convChannels = new Map();
+	var adminChannel = null;
+	var liveOn = null;               // the liveReady promise the channels belong to
+	var liveScope = null;
+	var TOAST_MS = 6000;
+	var TOAST_MAX = 4;
+	var PAIR_MS = 2000;
+	var toasts = [];                 // {node, timer}
+	var lastAlert = {};              // conversation id -> {type, at, toast}
+	var unread = {};                 // admin: conversation id -> true
+	var auditBase = 0;               // unseen events counted from the first page at unlock
+	var auditBaseNewest = 0;
+	var auditPrimed = false;
+	var auditLive = [];              // ids of events announced live
+	var auditSeen = 0;               // highest id the admin has seen
+	var auditSeenSent = 0;
 	var role = null;                 // 'admin' or 'guest'
 	var conversations = [];          // admin only
 	var current = null;              // admin only: the open conversation id
@@ -60,7 +77,7 @@
 		'audit-verified', 'audit-head', 'audit-body', 'audit-status', 'audit-more', 'audit-close',
 		'attach', 'attach-input', 'attach-list', 'files-key', 'key-backup', 'key-dialog', 'key-form',
 		'key-dialog-title', 'key-pass', 'key-setup', 'key-pass-again', 'key-status', 'key-cancel',
-		'key-save'].forEach(function (id) {
+		'key-save', 'desktop-alerts', 'toasts', 'pane-online'].forEach(function (id) {
 		el[id] = document.getElementById(id);
 	});
 
@@ -221,15 +238,27 @@
 			button.type = 'button';
 			button.className = conv.id === current ? 'conv-item is-selected' : 'conv-item';
 			button.setAttribute('data-id', String(conv.id));
+			var line = document.createElement('span');
+			line.className = 'conv-line';
 			var name = document.createElement('span');
 			name.className = 'conv-name';
 			name.textContent = conv.label;
+			var dot = document.createElement('span');
+			dot.className = 'online-dot';
+			dot.setAttribute('role', 'img');
+			dot.setAttribute('aria-label', 'Online');
+			dot.hidden = !isOnline(conv.id);
+			line.appendChild(name);
+			line.appendChild(dot);
+			if (unread[conv.id]) {
+				button.className += ' is-unread';
+			}
 			var meta = document.createElement('span');
 			meta.className = 'conv-meta';
 			meta.textContent = conv.last_at
 				? (conv.last_from_them ? 'They wrote, ' : 'You wrote, ') + formatTime(conv.last_at)
 				: 'No messages';
-			button.appendChild(name);
+			button.appendChild(line);
 			button.appendChild(meta);
 			button.addEventListener('click', function () { openConversation(conv.id); });
 			item.appendChild(button);
@@ -251,6 +280,7 @@
 				}
 				renderConversations();
 				layout();
+				syncConvChannels();
 				return true;
 			}
 			if (result.error === 'expired') {
@@ -262,6 +292,7 @@
 
 	function openConversation(id) {
 		current = id;
+		delete unread[id];
 		viewArchived = false;
 		pendingDelete = null;
 		lastSignature = '';
@@ -459,6 +490,309 @@
 		});
 	}
 
+	// ----- Live: alerts, presence, audit count -------------------------------
+
+	function hasRole(channel, wanted) {
+		if (!channel) {
+			return false;
+		}
+		try {
+			var state = channel.presenceState();
+			return Object.keys(state).some(function (key) {
+				return (state[key] || []).some(function (meta) { return meta && meta.role === wanted; });
+			});
+		} catch (e) {
+			return false;
+		}
+	}
+
+	function isOnline(id) {
+		return hasRole(convChannels.get(id), 'guest');
+	}
+
+	// Hook for call signalling; filled in by the calls task.
+	function onCallMessage(conversationId, payload) {}
+
+	function renderDots() {
+		if (role === 'admin') {
+			Array.prototype.forEach.call(el['conv-list'].querySelectorAll('.conv-item'), function (button) {
+				var dot = button.querySelector('.online-dot');
+				if (dot) {
+					dot.hidden = !isOnline(Number(button.getAttribute('data-id')));
+				}
+			});
+		} else {
+			el['pane-online'].hidden = !hasRole(convChannels.get(liveScope), 'admin');
+		}
+	}
+
+	// Opens a private channel and tracks our presence once joined.
+	function openChannel(topic, mine, lr) {
+		var channel;
+		try {
+			channel = window.TrippLive.channel(topic, window.TrippLive.peerId);
+		} catch (e) {
+			return null;
+		}
+		channel.on('presence', { event: 'sync' }, function () {
+			if (liveOn === lr) {
+				renderDots();
+			}
+		});
+		return channel;
+	}
+
+	function joinChannel(channel, mine, lr) {
+		channel.subscribe(function (status) {
+			if (status === 'SUBSCRIBED' && liveOn === lr && mine) {
+				channel.track({ role: mine });
+			}
+		});
+	}
+
+	function startLive() {
+		var lr = liveReady;
+		if (!lr) {
+			return;
+		}
+		lr.then(function (scope) {
+			if (liveReady !== lr || !token || scope === null) {
+				return;
+			}
+			if (role === 'admin' && scope === 0) {
+				liveOn = lr;
+				liveScope = 0;
+				adminChannel = openChannel('admin', null, lr);
+				if (adminChannel) {
+					adminChannel.on('broadcast', { event: 'event' }, function (message) {
+						if (liveOn === lr) {
+							onAdminEvent(message && message.payload);
+						}
+					});
+					joinChannel(adminChannel, null, lr);
+				}
+				syncConvChannels();
+			} else if (role === 'guest' && scope > 0) {
+				liveOn = lr;
+				liveScope = scope;
+				var channel = openChannel('conv:' + scope, 'guest', lr);
+				if (channel) {
+					convChannels.set(scope, channel);
+					joinChannel(channel, 'guest', lr);
+				}
+			}
+		}).catch(function () {});
+	}
+
+	// Admin: keep one conversation channel per listed conversation.
+	function syncConvChannels() {
+		if (!liveOn || liveOn !== liveReady || !token || role !== 'admin') {
+			return;
+		}
+		var lr = liveOn;
+		var wanted = {};
+		conversations.forEach(function (conv) { wanted[conv.id] = true; });
+		convChannels.forEach(function (channel, id) {
+			if (!wanted[id]) {
+				convChannels.delete(id);
+				try { channel.unsubscribe(); } catch (e) {}
+			}
+		});
+		conversations.forEach(function (conv) {
+			if (convChannels.has(conv.id)) {
+				return;
+			}
+			var id = conv.id;
+			var channel = openChannel('conv:' + id, 'admin', lr);
+			if (!channel) {
+				return;
+			}
+			channel.on('broadcast', { event: 'call' }, function (message) {
+				if (liveOn === lr) {
+					onCallMessage(id, message && message.payload);
+				}
+			});
+			convChannels.set(id, channel);
+			joinChannel(channel, 'admin', lr);
+		});
+		renderDots();
+	}
+
+	function convLabel(id) {
+		for (var i = 0; i < conversations.length; i += 1) {
+			if (conversations[i].id === id) {
+				return conversations[i].label;
+			}
+		}
+		return null;
+	}
+
+	function removeToast(record) {
+		clearTimeout(record.timer);
+		var at = toasts.indexOf(record);
+		if (at >= 0) {
+			toasts.splice(at, 1);
+		}
+		if (record.node.parentNode) {
+			record.node.parentNode.removeChild(record.node);
+		}
+	}
+
+	function armToast(record) {
+		clearTimeout(record.timer);
+		record.timer = setTimeout(function () { removeToast(record); }, TOAST_MS);
+	}
+
+	function addToast(text) {
+		while (toasts.length >= TOAST_MAX) {
+			removeToast(toasts[0]);
+		}
+		var node = document.createElement('div');
+		node.className = 'toast';
+		node.textContent = text;
+		el['toasts'].appendChild(node);
+		var record = { node: node, timer: null };
+		toasts.push(record);
+		armToast(record);
+		return record;
+	}
+
+	function auditRefreshLabel() {
+		var live = auditLive.filter(function (id) { return id > auditBaseNewest && id > auditSeen; }).length;
+		var n = auditBase + live;
+		el['open-audit'].textContent = n > 0 ? 'Audit log (' + (n > 99 ? '99+' : n) + ')' : 'Audit log';
+	}
+
+	function auditNewestId() {
+		var top = Math.max(auditBaseNewest, auditSeen);
+		auditLive.forEach(function (id) { top = Math.max(top, id); });
+		return top;
+	}
+
+	// Counts events newer than the stored mark, from the first page at unlock.
+	function auditPrime() {
+		var t = token;
+		rpc('m_audit', { p_token: t, p_kind: 'events', p_before: null, p_limit: AUDIT_LIMIT }).then(function (result) {
+			if (t !== token || !result.ok) {
+				return;
+			}
+			var rows = Array.isArray(result.rows) ? result.rows : [];
+			auditSeen = Math.max(auditSeen, Number(result.seen) || 0);
+			auditSeenSent = Math.max(auditSeenSent, auditSeen);
+			auditBaseNewest = rows.length ? Number(rows[0].id) : 0;
+			auditBase = rows.filter(function (row) { return Number(row.id) > auditSeen; }).length;
+			auditPrimed = true;
+			auditRefreshLabel();
+		});
+	}
+
+	function auditMarkSeen(id) {
+		if (!token || !id || id <= auditSeenSent) {
+			return;
+		}
+		auditSeenSent = id;
+		auditSeen = Math.max(auditSeen, id);
+		auditBase = 0;
+		auditLive = [];
+		auditRefreshLabel();
+		rpc('m_audit_seen', { p_token: token, p_id: id });
+	}
+
+	function desktopNotify(text) {
+		if (document.hidden && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+			try { new Notification(text); } catch (e) {}
+		}
+	}
+
+	var ALERT_TEXT = {
+		login: ' signed in',
+		message: ' sent a message',
+		upload: ' sent a file',
+		call_start: ' is calling'
+	};
+
+	function onAdminEvent(payload) {
+		if (!payload || !ALERT_TEXT[payload.type] || !token || role !== 'admin') {
+			return;
+		}
+		var id = Number(payload.conversation);
+		if (payload.id !== undefined && payload.id !== null) {
+			auditLive.push(Number(payload.id));
+			auditRefreshLabel();
+		}
+		var label = convLabel(id);
+		if (label === null) {
+			var t = token;
+			loadConversations().then(function () {
+				if (t === token && convLabel(id) !== null) {
+					showAlert(id, payload.type, convLabel(id));
+				}
+			});
+			return;
+		}
+		showAlert(id, payload.type, label);
+	}
+
+	function showAlert(id, type, label) {
+		if (!unread[id] && (current !== id || document.hidden)) {
+			unread[id] = true;
+			renderConversations();
+		}
+		var now = Date.now();
+		var prev = lastAlert[id];
+		var near = prev && now - prev.at <= PAIR_MS && toasts.indexOf(prev.toast) >= 0;
+		if (near && type === 'upload' && prev.type === 'message') {
+			// One alert per message: the file replaces the message toast.
+			prev.toast.node.textContent = label + ALERT_TEXT.upload;
+			armToast(prev.toast);
+			prev.type = 'upload';
+			prev.at = now;
+			return;
+		}
+		if (near && type === 'message' && prev.type === 'upload') {
+			prev.at = now;
+			return;
+		}
+		var text = label + ALERT_TEXT[type];
+		lastAlert[id] = { type: type, at: now, toast: addToast(text) };
+		desktopNotify(text);
+	}
+
+	function updateDesktopButton() {
+		el['desktop-alerts'].hidden = !(role === 'admin' && typeof Notification !== 'undefined' &&
+			Notification.permission === 'default');
+	}
+
+	el['desktop-alerts'].addEventListener('click', function () {
+		el['desktop-alerts'].hidden = true;
+		try {
+			var asked = Notification.requestPermission();
+			if (asked && asked.then) {
+				asked.then(updateDesktopButton, function () {});
+			}
+		} catch (e) {}
+	});
+
+	function liveReset() {
+		liveReady = null;
+		liveOn = null;
+		liveScope = null;
+		adminChannel = null;
+		convChannels.clear();
+		unread = {};
+		lastAlert = {};
+		auditBase = 0;
+		auditBaseNewest = 0;
+		auditPrimed = false;
+		auditLive = [];
+		auditSeen = 0;
+		auditSeenSent = 0;
+		toasts.slice().forEach(removeToast);
+		el['desktop-alerts'].hidden = true;
+		el['pane-online'].hidden = true;
+		el['open-audit'].textContent = 'Audit log';
+	}
+
 	// ----- Session -------------------------------------------------------------
 
 	function resetIdle() {
@@ -483,7 +817,14 @@
 		el['sync'].textContent = 'Loading';
 		document.title = 'Notes';
 		layout();
-		liveReady = window.TrippLive.start(token).then(function (r) { return r.scope; }).catch(function () { return null; });
+		try {
+			liveReady = window.TrippLive
+				? window.TrippLive.start(token).then(function (r) { return r.scope; }).catch(function () { return null; })
+				: Promise.resolve(null);
+		} catch (e) {
+			liveReady = Promise.resolve(null);
+		}
+		startLive();
 		refresh().then(function () {
 			el['thread'].scrollTop = el['thread'].scrollHeight;
 		});
@@ -498,6 +839,8 @@
 			el['compose-body'].focus();
 		} else {
 			loadOwnerInfo();
+			updateDesktopButton();
+			auditPrime();
 		}
 	}
 
@@ -514,9 +857,16 @@
 		// Hide first so a failure in the cleanup below can never leave the portal showing.
 		el['portal'].hidden = true;
 		el['lock'].hidden = false;
+		// Live teardown has its own guards so a failure there cannot skip the cleanup below.
 		try {
-			liveReady = null;
-			window.TrippLive.stop();
+			liveReset();
+		} catch (e) {}
+		try {
+			if (window.TrippLive) {
+				Promise.resolve(window.TrippLive.stop()).catch(function () {});
+			}
+		} catch (e) {}
+		try {
 			watermark = null;
 			conversations = [];
 			current = null;
@@ -1537,6 +1887,9 @@
 			var rows = Array.isArray(result.rows) ? result.rows : [];
 			if (!older) {
 				auditSetBadge(result.verified || { ok: false });
+				if (kind === 'events' && rows.length) {
+					auditMarkSeen(Number(rows[0].id));
+				}
 				if (!rows.length) {
 					setNote(el['audit-status'], 'No entries.');
 				}
@@ -1548,6 +1901,7 @@
 	}
 
 	el['open-audit'].addEventListener('click', function () {
+		auditMarkSeen(auditNewestId());
 		el['audit-dialog'].showModal();
 		auditLoad('events', false);
 	});

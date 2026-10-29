@@ -28,6 +28,7 @@
 			<ul id="conv-list" class="conv-list"></ul>
 			<footer class="sidebar-foot">
 				<button id="open-admin-key" class="button button-quiet" type="button">Settings</button>
+				<button id="desktop-alerts" class="button button-quiet" type="button" hidden>Desktop alerts</button>
 				<button id="open-audit" class="button button-quiet" type="button">Audit log</button>
 				<button id="files-key" class="button button-quiet" type="button" hidden>Unlock files</button>
 				<button id="key-backup" class="button button-quiet" type="button" hidden>Download key backup</button>
@@ -40,6 +41,7 @@
 				<button id="back" class="button button-quiet back" type="button" hidden>Back</button>
 				<div class="bar-text">
 					<h2 id="pane-title" class="pane-title"></h2>
+					<span id="pane-online" class="online-dot" role="img" aria-label="Online" hidden></span>
 					<span id="sync" class="sync" role="status" aria-live="polite"></span>
 				</div>
 				<span class="bar-actions">
@@ -68,6 +70,8 @@
 			</form>
 		</section>
 	</main>
+
+	<div id="toasts" class="toasts" aria-live="polite"></div>
 
 	<dialog id="conv-dialog" class="dialog">
 		<form id="conv-form" autocomplete="off">
