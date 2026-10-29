@@ -117,6 +117,13 @@ channel or read any file** — unacceptable for a secure portal.
   posting a file/recording) or **signed download URL** (for fetching one), scoped
   to that conversation. Object paths are namespaced by conversation id.
 
+**Built (Stage 2, 2026-10-28):** the token is a Supabase anonymous auth session,
+not a self-minted JWT. Each unlock calls `signInAnonymously()`, then
+`public.m_live_bind(p_token)` binds `auth.uid()` to the tripp session in
+`tripp.live_bindings`. Realtime private channels are authorized by RLS on
+`realtime.messages` through `tripp_live.live_topic_ok`, which follows the same
+idle and 12-hour limits as the session. Storage stays as described above.
+
 This keeps the project's founding principle intact — *the secret check lives in
 code we control, not in client-trusted RLS alone* — while letting Storage and
 Realtime do their jobs. It is the riskiest and most intricate part of the build
@@ -318,6 +325,9 @@ publishable keys are already public.
 Each stage is shippable and additive; nothing in a later stage rewrites an
 earlier one.
 
+**Order (owner directive, 2026-10-28):** 0 → 2 → 3 → 0.5 → 1 → 4 → 5. Stages 2
+and 3 were built and deployed ahead of 0.5 and 1.
+
 - **Stage 0 — foundations & quick wins (no new always-on infra).**
   Supabase keep-alive (Tripp + HOPE); per-visit and per-action **audit logging**
   (tables, hash-chain, IP/geo/UA enrichment, wired into existing `m_*`); **inline
@@ -380,6 +390,12 @@ earlier one.
   material, or (ii) we must use Supabase Auth anonymous/custom sessions instead —
   in which case the login path and token model in §5 adjust. Flagged so it is
   proven before the back half is committed, not during it.
+- **Spike result (2026-10-28): anonymous binding.** Option (ii) was chosen.
+  Supabase anonymous sessions work with Realtime private-channel RLS: a user
+  outside the allow-list gets `CHANNEL_ERROR` (Unauthorized), a listed user
+  subscribes in about 50 ms, and `realtime.send` from Postgres reaches the
+  subscriber. Presence needs an INSERT policy as well as SELECT. A self-signed
+  JWT was not tried. Details are in the plan's Task 1 spike results.
 - **Multiple sessions on one password (calls/presence).** A conversation password
   is shared and not bound to one device, so two guest sessions (or two admin tabs)
   can be live at once. Builder's call: presence is modeled **per connection**, not

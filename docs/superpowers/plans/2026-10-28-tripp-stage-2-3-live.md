@@ -365,3 +365,5 @@ Messages carrying `to` are ignored by every other peer. A side only rings for me
   - Ask the owner to check, in a real browser on two devices: an alert, the online dot, a video call from phone to desktop, and a guest switching apps mid-call.
   - Ask the owner to click **Desktop alerts** once.
   - Mention the limit: calls across strict networks (some mobile carriers, corporate firewalls) may fail until Stage 4 adds a relay.
+
+**Task 9 results (2026-10-28):** SQL, JS (44) and live (9) suites pass. Deployed to gh-pages; published index.html carries `live.js`, `call.js` and `app.js` with `?v=20261029042122`, `vendor/supabase-2.117.3.js`, and `wss://ohhkzjsdabdimlrgnagw.supabase.co` in the CSP. Headless smoke test against the live URL passed 7/7 (alert, unread mark, both online dots, audio call connected and ended, no CSP violations); ids are in `docs/OPS-NOTES.md`.
