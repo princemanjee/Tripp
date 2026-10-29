@@ -228,6 +228,9 @@ begin
 	insert into tripp.events (at, scope, visit_id, type, ref_id, detail, prev_hash, row_hash)
 	values (e.at, e.scope, e.visit_id, e.type, e.ref_id, e.detail, e.prev_hash, e.row_hash)
 	returning id into e.id;
+	if p_type in ('login', 'message', 'upload', 'call_start') and p_scope > 0 then
+		perform tripp.live_alert(e.id, p_type, p_scope, e.at);
+	end if;
 	return e.id;
 end;
 $$;
@@ -410,6 +413,10 @@ begin
 		return json_build_object('ok', false, 'error', 'bad_kind');
 	end if;
 	if p_before is null then
+		if p_kind = 'events' then
+			return json_build_object('ok', true, 'rows', v_rows, 'verified', tripp.verify_chain(p_kind),
+				'seen', (select s.audit_seen from tripp.settings s where s.id = 1));
+		end if;
 		return json_build_object('ok', true, 'rows', v_rows, 'verified', tripp.verify_chain(p_kind));
 	end if;
 	return json_build_object('ok', true, 'rows', v_rows);

@@ -9,6 +9,7 @@ export const SCHEMA_FILES = [
   'supabase/keys.sql',
   'supabase/media.sql',
   'supabase/retention.sql',
+  'supabase/live.sql',
 ];
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
