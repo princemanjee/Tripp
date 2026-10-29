@@ -148,6 +148,76 @@ $$;
 revoke all on function public.m_audit_seen(text, bigint) from public;
 grant execute on function public.m_audit_seen(text, bigint) to anon, authenticated;
 
+-- API: call metadata on the audit record. Only who, when, how and how long; no
+-- media and no content. A guest logs under their own conversation, the admin
+-- under scope 0 with the conversation in detail. Both parties may log 'end'.
+create or replace function public.m_call(
+	p_token text, p_conversation bigint, p_call uuid, p_action text, p_detail jsonb default '{}'
+) returns json
+language plpgsql volatile security definer set search_path = ''
+as $$
+declare
+	v_scope bigint := tripp.session_scope(p_token);
+	v_visit bigint := tripp.token_visit(p_token);
+	v_conv bigint;
+	v_d jsonb := case when jsonb_typeof(p_detail) = 'object' then p_detail else '{}'::jsonb end;
+	v_ans timestamptz;
+	v_dur bigint;
+	v_ev jsonb;
+	v_id bigint;
+begin
+	if v_scope is null then
+		return json_build_object('ok', false, 'error', 'expired');
+	end if;
+	if v_scope > 0 then
+		if p_conversation is not null and p_conversation <> v_scope then
+			return json_build_object('ok', false, 'error', 'forbidden');
+		end if;
+		v_conv := v_scope;
+	else
+		if p_conversation is null
+		   or not exists (select 1 from tripp.conversations c where c.id = p_conversation) then
+			return json_build_object('ok', false, 'error', 'bad_conversation');
+		end if;
+		v_conv := p_conversation;
+	end if;
+	if p_call is null or p_action is null then
+		return json_build_object('ok', false, 'error', 'bad_input');
+	end if;
+	v_ev := jsonb_build_object('call', p_call::text, 'conversation', v_conv);
+	if p_action = 'start' then
+		if jsonb_typeof(v_d -> 'kind') is distinct from 'string' or (v_d ->> 'kind') not in ('audio', 'video') then
+			return json_build_object('ok', false, 'error', 'bad_input');
+		end if;
+		v_ev := v_ev || jsonb_build_object('kind', v_d ->> 'kind');
+		v_id := tripp.log_event('call_start', v_scope, v_visit, null, v_ev);
+	elsif p_action = 'answer' then
+		v_id := tripp.log_event('call_answer', v_scope, v_visit, null, v_ev);
+	elsif p_action = 'end' then
+		if jsonb_typeof(v_d -> 'reason') is distinct from 'string'
+		   or (v_d ->> 'reason') not in ('hangup', 'declined', 'missed', 'failed', 'lock')
+		   or jsonb_typeof(v_d -> 'relay') is distinct from 'string'
+		   or (v_d ->> 'relay') not in ('host', 'srflx', 'prflx', 'relay', 'unknown') then
+			return json_build_object('ok', false, 'error', 'bad_input');
+		end if;
+		select e.at into v_ans from tripp.events e
+		 where e.type = 'call_answer' and e.detail ->> 'call' = p_call::text
+		 order by e.id limit 1;
+		if v_ans is not null then
+			v_dur := greatest(0, floor(extract(epoch from clock_timestamp() - v_ans)))::bigint;
+		end if;
+		v_ev := v_ev || jsonb_build_object('reason', v_d ->> 'reason', 'relay', v_d ->> 'relay',
+		                                   'duration_s', v_dur);
+		v_id := tripp.log_event('call_end', v_scope, v_visit, null, v_ev);
+	else
+		return json_build_object('ok', false, 'error', 'bad_input');
+	end if;
+	return json_build_object('ok', true, 'event', v_id);
+end;
+$$;
+revoke all on function public.m_call(text, bigint, uuid, text, jsonb) from public;
+grant execute on function public.m_call(text, bigint, uuid, text, jsonb) to anon, authenticated;
+
 -- Internal: delete anonymous auth users older than 13 hours (a session lives at
 -- most 12) and bindings whose session is gone.
 create or replace function tripp.live_cleanup() returns void
