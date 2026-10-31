@@ -626,6 +626,7 @@
 			kind: kind,
 			role: r,
 			peerId: window.TrippLive.peerId,
+			token: t,
 			onState: function (state, info) { onCallState(session, state, info); },
 			onStreams: function (local, remote) {
 				if (activeCall === session) {

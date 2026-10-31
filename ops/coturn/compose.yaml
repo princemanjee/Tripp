@@ -1,0 +1,25 @@
+# Tripp TURN relay. Runs inside the Lima VM `coturn` (lima.yaml), not on
+# Docker Desktop. Setup and owner steps: README.md in this folder.
+services:
+  coturn:
+    image: coturn/coturn:4.18.0
+    restart: unless-stopped
+    env_file: .env
+    entrypoint: ["/run.sh"]
+    network_mode: host
+    volumes:
+      - ./turnserver.conf:/etc/coturn/turnserver.conf:ro
+      - ./run.sh:/run.sh:ro
+      - ./certs/live:/certs:ro
+
+  # Renews the Let's Encrypt certificate (HTTP-01 on port 80) twice a day when
+  # it is due, and copies it where coturn (user nobody) can read it.
+  certbot:
+    image: certbot/certbot:v3.1.0
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./certs/letsencrypt:/etc/letsencrypt
+      - ./certs/live:/out
+      - ./deploy-hook.sh:/deploy-hook.sh:ro
+    entrypoint: ["/bin/sh", "-c", "trap exit TERM; while :; do certbot renew --standalone --deploy-hook /deploy-hook.sh; sleep 43200 & wait $${!}; done"]

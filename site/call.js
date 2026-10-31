@@ -15,6 +15,7 @@
 	var CONNECT_MS = 45000;          // accepted but never connected -> `failed`
 	var DISCONNECT_MS = 10000;       // ICE `disconnected` longer than this -> `failed`
 	var STATS_MS = 1000;             // how long hanging up waits for getStats
+	var TURN_MS = 5000;              // how long a call waits for TURN credentials before going without
 	var LOG_REASONS = { hangup: 1, declined: 1, missed: 1, failed: 1, lock: 1 };
 	var RELAYS = { host: 1, srflx: 1, prflx: 1, relay: 1 };
 
@@ -94,10 +95,39 @@
 		return Boolean(other) && senderRole === other;
 	}
 
-	// The one place the RTCPeerConnection configuration is built.
-	function iceConfig() {
+	// The one place the RTCPeerConnection configuration is built: the STUN
+	// servers from config, then any TURN relays fetched for this call.
+	function iceConfig(extra) {
 		var cfg = root.APP_CONFIG || {};
-		return { iceServers: Array.isArray(cfg.iceServers) ? cfg.iceServers : [] };
+		var list = Array.isArray(cfg.iceServers) ? cfg.iceServers.slice() : [];
+		return { iceServers: list.concat(Array.isArray(extra) ? extra : []) };
+	}
+
+	// Short-lived TURN credentials from the `turn` Edge Function. Always
+	// resolves: any failure, or no answer within TURN_MS, gives [] and the
+	// call goes ahead on STUN alone.
+	function fetchTurn(token) {
+		var cfg = root.APP_CONFIG || {};
+		if (!token || !cfg.functions || !cfg.key || !cfg.turn || typeof root.fetch !== 'function') {
+			return Promise.resolve([]);
+		}
+		var headers = { 'Content-Type': 'application/json', 'apikey': cfg.key };
+		if (cfg.key.indexOf('sb_') !== 0) {
+			headers['Authorization'] = 'Bearer ' + cfg.key;
+		}
+		var request = root.fetch(cfg.functions + '/' + cfg.turn, {
+			method: 'POST',
+			headers: headers,
+			body: JSON.stringify({ token: token }),
+			cache: 'no-store',
+			referrerPolicy: 'no-referrer'
+		}).then(function (response) {
+			return response.ok ? response.json() : null;
+		}).then(function (data) {
+			return data && data.ok && Array.isArray(data.iceServers) ? data.iceServers : [];
+		}).catch(function () { return []; });
+		var timeout = new Promise(function (resolve) { setTimeout(function () { resolve([]); }, TURN_MS); });
+		return Promise.race([request, timeout]);
 	}
 
 	// ----- Ring tone: Web Audio, 440 Hz, 1 s on and 2 s off ----------------------
@@ -153,7 +183,7 @@
 	// opts: {channel, conversationId, kind, role, onState}
 	// plus, from the page: peerId, log(action, callId, detail) -> Promise,
 	// peers() -> peer ids on the other side, getMedia(constraints) -> Promise<MediaStream>,
-	// onStreams(local, remote).
+	// onStreams(local, remote), token (the session token, for TURN credentials).
 	function CallSession(opts) {
 		opts = opts || {};
 		this.channel = opts.channel;
@@ -163,6 +193,8 @@
 		this.onState = opts.onState || noop;
 		this.onStreams = opts.onStreams || noop;
 		this.peerId = opts.peerId || (root.TrippLive && root.TrippLive.peerId);
+		this.token = opts.token || null;
+		this.turnServers = [];
 		this.log = opts.log || function () { return Promise.resolve(); };
 		this.peers = opts.peers || function () { return []; };
 		this.getMedia = opts.getMedia || function (c) { return root.navigator.mediaDevices.getUserMedia(c); };
@@ -231,7 +263,12 @@
 		if (self.kind === 'video') {
 			constraints.video = { width: { ideal: 1280 }, height: { ideal: 720 } };
 		}
+		// TURN credentials are fetched while the browser asks for media, so the
+		// relay is ready before either side builds its RTCPeerConnection.
+		var turn = fetchTurn(self.token).then(function (list) { self.turnServers = list; });
 		return Promise.resolve().then(function () { return self.getMedia(constraints); }).then(function (stream) {
+			return turn.then(function () { return stream; });
+		}).then(function (stream) {
 			if (self.ended) {
 				stream.getTracks().forEach(function (t) { t.stop(); });
 				return false;
@@ -244,7 +281,7 @@
 
 	CallSession.prototype.createPc = function () {
 		var self = this;
-		var pc = new root.RTCPeerConnection(iceConfig());
+		var pc = new root.RTCPeerConnection(iceConfig(self.turnServers));
 		self.pc = pc;
 		pc.onicecandidate = function (e) {
 			if (e.candidate && !self.ended) {

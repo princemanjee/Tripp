@@ -56,6 +56,18 @@ test('iceConfig takes the servers from config', () => {
 	}
 });
 
+test('iceConfig puts fetched TURN servers after the STUN servers', () => {
+	const prev = globalThis.APP_CONFIG;
+	globalThis.APP_CONFIG = { iceServers: [{ urls: ['stun:example.org:3478'] }] };
+	const turn = { urls: ['turn:relay.example.org:3478'], username: 'u', credential: 'c' };
+	try {
+		assert.deepEqual(T.iceConfig([turn]), { iceServers: [{ urls: ['stun:example.org:3478'] }, turn] });
+		assert.deepEqual(globalThis.APP_CONFIG.iceServers, [{ urls: ['stun:example.org:3478'] }]);
+	} finally {
+		globalThis.APP_CONFIG = prev;
+	}
+});
+
 function fakeSession(sent, logs) {
 	const channel = { send: (m) => { sent.push(m.payload); return Promise.resolve(); } };
 	return new T.CallSession({

@@ -1,0 +1,20 @@
+# Linux VM for the Tripp coturn relay. Docker Desktop on macOS rewrites the
+# source address of incoming UDP, which breaks TURN peer permissions, so coturn
+# runs in this VM instead: bridged onto the home LAN (en0) with its own
+# address, rootful Docker, coturn on the host network. This folder is mounted
+# writable at /srv/coturn (outside the read-only home mount).
+# Create: limactl create --name=coturn ops/coturn/lima.yaml (see README.md).
+base: template:docker-rootful
+vmType: vz
+cpus: 2
+memory: 2GiB
+disk: 20GiB
+mounts:
+  - location: "/Users/macstudio/Documents/GitHub/Tripp/ops/coturn"
+    mountPoint: /srv/coturn
+    writable: true
+networks:
+  # Fixed MAC so the router can give the VM a DHCP reservation.
+  - lima: bridged
+    macAddress: "52:55:55:1a:7c:63"
+    interface: lima0
