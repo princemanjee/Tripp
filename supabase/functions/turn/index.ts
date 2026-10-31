@@ -11,7 +11,6 @@ import { turnServer } from '../_shared/turn.js';
 const TTL_SECONDS = 600;
 
 const sql = postgres(Deno.env.get('SUPABASE_DB_URL')!, { prepare: false, max: 1 });
-const SECRET = Deno.env.get('TURN_SECRET') || '';
 
 Deno.serve(async (req: Request) => {
   const origin = req.headers.get('origin') || '';
@@ -35,10 +34,12 @@ Deno.serve(async (req: Request) => {
     if (rows[0].scope === null) {
       return json({ ok: false, error: 'session' }, 200, origin);
     }
-    if (!SECRET) {
+    // Read per request so a changed secret applies without a redeploy.
+    const secret = Deno.env.get('TURN_SECRET') || '';
+    if (!secret) {
       return json({ ok: false, error: 'setup' }, 200, origin);
     }
-    const server = await turnServer(SECRET, TTL_SECONDS);
+    const server = await turnServer(secret, TTL_SECONDS);
     return json({ ok: true, iceServers: [server], ttl: TTL_SECONDS }, 200, origin);
   } catch (e) {
     console.error('turn failed:', e instanceof Error ? e.message : 'unknown');
