@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<meta name="robots" content="noindex, nofollow, noarchive">
+	<meta name="referrer" content="no-referrer">
+	<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src https://*.supabase.co wss://ohhkzjsdabdimlrgnagw.supabase.co; img-src blob:; media-src blob:; base-uri 'none'; form-action 'none'">
+	<title>Sign in</title>
+	<link rel="stylesheet" href="styles.css?v=20261031133846">
+</head>
+<body>
+
+	<main id="lock" class="lock">
+		<form id="lock-form" class="lock-card" autocomplete="off">
+			<input id="lock-password" class="field" type="password" aria-label="Password" autocomplete="current-password" autofocus required>
+			<button id="lock-submit" class="button button-primary" type="submit">Unlock</button>
+		</form>
+	</main>
+
+	<main id="portal" class="portal" hidden>
+
+		<aside id="sidebar" class="sidebar" aria-label="Conversations" hidden>
+			<header class="sidebar-head">
+				<h1 class="sidebar-title">Conversations</h1>
+				<button id="new-conv" class="button button-quiet" type="button">New</button>
+			</header>
+			<ul id="conv-list" class="conv-list"></ul>
+			<footer class="sidebar-foot">
+				<button id="open-admin-key" class="button button-quiet" type="button">Settings</button>
+				<button id="desktop-alerts" class="button button-quiet" type="button" hidden>Desktop alerts</button>
+				<button id="open-audit" class="button button-quiet" type="button">Audit log</button>
+				<button id="files-key" class="button button-quiet" type="button" hidden>Unlock files</button>
+				<button id="key-backup" class="button button-quiet" type="button" hidden>Download key backup</button>
+				<button id="lock-now-side" class="button button-quiet" type="button">Lock</button>
+			</footer>
+		</aside>
+
+		<section id="pane" class="pane">
+			<header class="bar">
+				<button id="back" class="button button-quiet back" type="button" hidden>Back</button>
+				<div class="bar-text">
+					<h2 id="pane-title" class="pane-title"></h2>
+					<span id="pane-online" class="online-dot" role="img" aria-label="Online" hidden></span>
+					<span id="sync" class="sync" role="status" aria-live="polite"></span>
+				</div>
+				<span class="bar-actions">
+					<button id="call-audio" class="button button-quiet" type="button" hidden>Call</button>
+					<button id="call-video" class="button button-quiet" type="button" hidden>Video call</button>
+					<button id="toggle-archived" class="button button-quiet" type="button" hidden>Archived</button>
+					<button id="conv-settings" class="button button-quiet" type="button" hidden>Settings</button>
+					<button id="lock-now" class="button button-quiet" type="button">Lock</button>
+				</span>
+			</header>
+
+			<p id="archived-banner" class="banner" hidden>Archived messages. Only you can see these. <button id="leave-archived" class="link-button" type="button">Back to the conversation</button></p>
+
+			<section id="thread" class="thread" aria-label="Messages" tabindex="0"></section>
+
+			<form id="compose" class="compose">
+				<label for="compose-body" class="visually-hidden">Message</label>
+				<textarea id="compose-body" class="field compose-body" rows="3" maxlength="10000" placeholder="Write a message"></textarea>
+				<ul id="attach-list" class="attach-list" hidden></ul>
+				<div class="compose-row">
+					<span id="compose-status" class="status" role="status" aria-live="polite"></span>
+					<span class="compose-actions">
+						<input id="attach-input" type="file" multiple hidden>
+						<button id="attach" class="button button-quiet" type="button" hidden>Attach</button>
+						<button id="compose-send" class="button button-primary" type="submit">Send</button>
+					</span>
+				</div>
+			</form>
+		</section>
+	</main>
+
+	<div id="toasts" class="toasts" aria-live="polite"></div>
+
+	<dialog id="conv-dialog" class="dialog">
+		<form id="conv-form" autocomplete="off">
+			<h2 id="conv-dialog-title" class="dialog-title">New conversation</h2>
+			<label class="dialog-label" for="conv-label">Name (only you see this)</label>
+			<input id="conv-label" class="field" type="text" maxlength="100">
+			<label class="dialog-label" for="conv-password">Their password</label>
+			<input id="conv-password" class="field" type="password" autocomplete="new-password">
+			<label class="dialog-label" for="conv-password-again">Their password again</label>
+			<input id="conv-password-again" class="field" type="password" autocomplete="new-password">
+			<p id="conv-hint" class="hint">Leave the password empty to keep the current one.</p>
+			<label id="conv-hold-row" class="check-row" hidden>
+				<input id="conv-hold" type="checkbox">
+				<span>Legal hold</span>
+			</label>
+			<p id="conv-status" class="status" role="status" aria-live="polite"></p>
+			<div class="dialog-row">
+				<button id="conv-delete" class="button button-danger" type="button">Delete conversation</button>
+				<span class="dialog-row-end">
+					<button id="conv-cancel" class="button button-quiet" type="button">Close</button>
+					<button id="conv-save" class="button button-primary" type="submit">Save</button>
+				</span>
+			</div>
+		</form>
+	</dialog>
+
+	<dialog id="admin-key-dialog" class="dialog">
+		<form id="admin-key-form" autocomplete="off">
+			<h2 class="dialog-title">Settings</h2>
+			<label class="dialog-label" for="admin-key-new">New password</label>
+			<input id="admin-key-new" class="field" type="password" autocomplete="new-password" required>
+			<label class="dialog-label" for="admin-key-again">New password again</label>
+			<input id="admin-key-again" class="field" type="password" autocomplete="new-password" required>
+			<p id="admin-key-status" class="status" role="status" aria-live="polite"></p>
+			<div class="dialog-row">
+				<span></span>
+				<span class="dialog-row-end">
+					<button id="admin-key-save" class="button button-primary" type="submit">Save password</button>
+				</span>
+			</div>
+			<label class="dialog-label" for="retention-days">Delete after (days)</label>
+			<input id="retention-days" class="field" type="number" min="1" step="1" inputmode="numeric">
+			<p id="retention-status" class="status" role="status" aria-live="polite"></p>
+			<div class="dialog-row">
+				<span></span>
+				<span class="dialog-row-end">
+					<button id="retention-save" class="button button-primary" type="button">Save retention</button>
+					<button id="admin-key-cancel" class="button button-quiet" type="button">Close</button>
+				</span>
+			</div>
+		</form>
+	</dialog>
+
+	<dialog id="key-dialog" class="dialog">
+		<form id="key-form" autocomplete="off">
+			<h2 id="key-dialog-title" class="dialog-title">Unlock files</h2>
+			<label class="dialog-label" for="key-pass">Passphrase</label>
+			<input id="key-pass" class="field" type="password" autocomplete="off">
+			<div id="key-setup" hidden>
+				<label class="dialog-label" for="key-pass-again">Passphrase again</label>
+				<input id="key-pass-again" class="field" type="password" autocomplete="off">
+			</div>
+			<p id="key-status" class="status" role="status" aria-live="polite"></p>
+			<div class="dialog-row">
+				<span></span>
+				<span class="dialog-row-end">
+					<button id="key-cancel" class="button button-quiet" type="button">Close</button>
+					<button id="key-save" class="button button-primary" type="submit">Unlock</button>
+				</span>
+			</div>
+		</form>
+	</dialog>
+
+	<dialog id="audit-dialog" class="dialog dialog-wide">
+		<h2 class="dialog-title">Audit log</h2>
+		<div class="audit-tabs" role="tablist">
+			<button id="audit-tab-events" class="button button-quiet audit-tab" type="button" role="tab" aria-selected="true">Events</button>
+			<button id="audit-tab-visits" class="button button-quiet audit-tab" type="button" role="tab" aria-selected="false">Visits</button>
+		</div>
+		<p id="audit-verified" class="status" role="status" aria-live="polite"></p>
+		<div class="audit-scroll">
+			<table class="audit-table">
+				<thead id="audit-head"></thead>
+				<tbody id="audit-body"></tbody>
+			</table>
+		</div>
+		<p id="audit-status" class="status" role="status" aria-live="polite"></p>
+		<div class="dialog-row">
+			<button id="audit-more" class="button button-quiet" type="button" hidden>Load older</button>
+			<span class="dialog-row-end">
+				<button id="audit-close" class="button button-quiet" type="button">Close</button>
+			</span>
+		</div>
+	</dialog>
+
+	<dialog id="call-incoming" class="dialog">
+		<p id="call-incoming-text" class="dialog-title"></p>
+		<div class="dialog-row">
+			<span></span>
+			<span class="dialog-row-end">
+				<button id="call-decline" class="button button-danger" type="button">Decline</button>
+				<button id="call-answer" class="button button-primary" type="button">Answer</button>
+			</span>
+		</div>
+	</dialog>
+
+	<dialog id="call-panel" class="dialog dialog-call">
+		<div class="call-media">
+			<video id="remote-video" class="call-remote" autoplay playsinline></video>
+			<video id="local-video" class="call-local" autoplay playsinline muted></video>
+		</div>
+		<p id="call-status" class="status" role="status" aria-live="polite"></p>
+		<div class="dialog-row">
+			<span class="dialog-row-end">
+				<button id="call-mute" class="button button-quiet" type="button">Mute</button>
+				<button id="call-camera" class="button button-quiet" type="button" hidden>Camera off</button>
+				<button id="call-hangup" class="button button-danger" type="button">Hang up</button>
+			</span>
+		</div>
+	</dialog>
+
+	<script src="config.js?v=20261031133846"></script>
+	<script src="crypto.js?v=20261031133846"></script>
+	<script src="vendor/supabase-2.117.3.js"></script>
+	<script src="live.js?v=20261031133846"></script>
+	<script src="call.js?v=20261031133846"></script>
+	<script src="app.js?v=20261031133846"></script>
+</body>
+</html>
